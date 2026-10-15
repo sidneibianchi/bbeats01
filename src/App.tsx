@@ -27,8 +27,6 @@ import { LocalFileManagerModal } from './components/LocalFileManagerModal';
 import { Volume2 } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine';
 import {
-  sambaPreset,
-  availablePresets,
   createEmptySteps,
   createNewCustomRhythm,
   StarterKitType,
@@ -131,11 +129,11 @@ export default function App() {
     } catch (e) {
       console.error('Failed to load rhythms from localStorage', e);
     }
-    return availablePresets.map((p) => sanitizeProject(p));
+    return [];
   });
 
   const [project, setProject] = useState<SongProject>(() => {
-    const p = rhythms[0] || sambaPreset;
+    const p = rhythms[0] || createBlankRhythm();
     return sanitizeProject(p);
   });
 

@@ -15,7 +15,6 @@ import {
   addDeletedSample,
 } from './sampleStorage';
 import { deleteSampleFromDatabase } from '../lib/uploadSample';
-import { BUILT_IN_SAMPLES } from '../presets/defaultSamples';
 
 export interface SchedulerCallback {
   onStep: (stepInfo: {
@@ -345,17 +344,6 @@ export class AudioEngine {
           !deletedSet.has(s.name.toLowerCase()) &&
           !deletedSet.has((s.fileName || '').toLowerCase())
       );
-
-      // Only inject default built-in catalog on first virgin install
-      if (samples.length === 0 && deletedSet.size === 0) {
-        for (const b of BUILT_IN_SAMPLES) {
-          samples.push({
-            id: b.id,
-            name: b.name,
-            fileName: b.fileName,
-          });
-        }
-      }
 
       // Also gather any custom samples referenced in current project tracks
       if (this.currentProject?.tracks) {
