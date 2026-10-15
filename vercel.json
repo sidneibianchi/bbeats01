@@ -1,10 +1,10 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "npm run db:generate && npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/((?!samples/|rhythms.json|active_rhythm.json|manifest.json|assets/).*)",
+      "source": "/((?!api/|samples/|rhythms.json|active_rhythm.json|manifest.json|assets/).*)",
       "destination": "/index.html"
     }
   ],
