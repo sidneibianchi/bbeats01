@@ -54,6 +54,22 @@ import { footswitchManager } from './audio/midiAndPedalManager';
 
 export default function App() {
 
+  const isUsableProject = (value: unknown): value is SongProject => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const candidate = value as Partial<SongProject>;
+    const verse = candidate.parts?.verse;
+    return (
+      typeof candidate.id === 'string' &&
+      typeof candidate.name === 'string' &&
+      Array.isArray(candidate.tracks) &&
+      !!verse &&
+      typeof verse === 'object' &&
+      !!verse.trackSteps &&
+      typeof verse.trackSteps === 'object' &&
+      !Array.isArray(verse.trackSteps)
+    );
+  };
+
   // Helper to sanitize project names and migrate outdated 2/4 formulas
   const sanitizeProject = (p: SongProject): SongProject => {
     const cleanName = (p.name || '')
@@ -106,7 +122,10 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((p: SongProject) => sanitizeProject(p));
+          const usableProjects = parsed
+            .filter(isUsableProject)
+            .map((p) => sanitizeProject(p));
+          if (usableProjects.length > 0) return usableProjects;
         }
       }
     } catch (e) {
@@ -290,8 +309,11 @@ export default function App() {
       const remoteRhythms = await fetchRhythmsFromServer();
       const activeRhythmId = await fetchActiveRhythmFromServer();
 
-      if (remoteRhythms && Array.isArray(remoteRhythms) && remoteRhythms.length > 0) {
-        const typedRhythms = remoteRhythms as SongProject[];
+      const typedRhythms = Array.isArray(remoteRhythms)
+        ? remoteRhythms.filter(isUsableProject).map(sanitizeProject)
+        : [];
+
+      if (typedRhythms.length > 0) {
         setRhythms(typedRhythms);
         localStorage.setItem('beatbuddy_rhythms', JSON.stringify(typedRhythms));
 
@@ -307,13 +329,16 @@ export default function App() {
           setProject(targetRhythm);
           audioEngine.updateProject(targetRhythm);
         }
-      } else if (remoteRhythms && Array.isArray(remoteRhythms)) {
+      } else if (Array.isArray(remoteRhythms) && remoteRhythms.length === 0) {
         setRhythms([]);
         localStorage.setItem('beatbuddy_rhythms', JSON.stringify([]));
         const blankProject = createBlankRhythm();
         skipNextRhythmAutosaveRef.current = true;
         setProject(blankProject);
         audioEngine.updateProject(blankProject);
+      } else if (Array.isArray(remoteRhythms)) {
+        console.warn('Remote rhythm list contained no usable projects; preserving the local library.');
+        triggerPedalToast('A biblioteca remota contém ritmos inválidos; os ritmos locais foram preservados.');
       } else {
         triggerPedalToast('Não foi possível carregar os ritmos remotos; a cópia local foi preservada.');
       }
