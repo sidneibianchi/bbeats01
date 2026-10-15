@@ -20,9 +20,15 @@ import {
   RefreshCw,
   ExternalLink,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import { SongProject } from '../types/rhythm';
-import { exportFullLibraryBackup, importFullLibraryBackup, saveRhythmsToServer } from '../audio/sampleStorage';
+import {
+  clearLocalRhythmAndSampleCache,
+  exportFullLibraryBackup,
+  importFullLibraryBackup,
+  saveRhythmsToServer,
+} from '../audio/sampleStorage';
 import { getAllDrumKits } from '../services/kitStorage';
 import { audioEngine } from '../audio/AudioEngine';
 
@@ -194,6 +200,34 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
       onShowToast('📦 Backup completo baixado com sucesso!');
     } catch {
       setFeedback({ type: 'error', message: 'Erro ao gerar backup completo.' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleClearLocalLibrary = async () => {
+    const confirmed = window.confirm(
+      'Um backup dos dados locais será baixado antes da limpeza. Isso remove ritmos e samples deste navegador, mas não altera nada no Neon. Continuar?'
+    );
+    if (!confirmed) return;
+
+    setIsProcessing(true);
+    setFeedback(null);
+    try {
+      await exportFullLibraryBackup();
+      await clearLocalRhythmAndSampleCache();
+      setFeedback({
+        type: 'success',
+        message: 'Backup baixado e cache local limpo. O Neon não foi alterado; a página será recarregada.',
+      });
+      onShowToast('Backup criado e dados locais removidos; dados do Neon preservados.');
+      window.setTimeout(() => window.location.reload(), 1500);
+    } catch (error) {
+      console.error('Failed to back up and clear local rhythm/sample data:', error);
+      setFeedback({
+        type: 'error',
+        message: 'Não foi possível concluir a limpeza. Verifique se o navegador permite baixar o backup e tente novamente.',
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -453,11 +487,11 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                 </div>
 
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Todos os arquivos de áudio (.wav, .mp3) ficam armazenados diretamente na pasta física <strong>public/samples/</strong> do projeto. Você pode colocar novos arquivos nela ou usar a tela de biblioteca para carregar pelo navegador.
+                  Os samples compartilhados vêm do Neon/UploadThing e o navegador mantém apenas um cache em IndexedDB. Novos samples devem ser adicionados pela biblioteca do app.
                 </p>
 
                 <div className="p-3 bg-black/30 rounded-lg border border-slate-800 space-y-2 text-xs">
-                  <p className="font-semibold text-slate-300">Samples incluídos na pasta do app:</p>
+                  <p className="font-semibold text-slate-300">Samples de referência dos kits:</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[11px] text-slate-400">
                     <span className="truncate">🎵 GRAVE SD.wav</span>
                     <span className="truncate">🎵 GRAVE 2 SD.wav</span>
@@ -535,6 +569,27 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                   </label>
                 </div>
               </div>
+
+              <div className="bg-rose-950/20 border border-rose-500/30 rounded-xl p-4 space-y-3">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Trash2 className="w-4 h-4 text-rose-400" />
+                    Limpar ritmos e samples deste navegador
+                  </h4>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    Baixa um backup antes de apagar o cache de ritmos, samples do IndexedDB e preferências locais de samples. Os dados do Neon não são alterados e serão carregados novamente após a limpeza.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearLocalLibrary}
+                  disabled={isProcessing}
+                  className="px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950 text-rose-200 hover:bg-rose-700 border border-rose-500/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isProcessing ? 'Processando...' : 'Baixar backup e limpar cache local'}</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -542,7 +597,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
         {/* Footer */}
         <div className="p-4 border-t border-slate-800 bg-[#0e1628] flex items-center justify-between">
           <span className="text-[11px] text-slate-400">
-            Formato padrão: <strong className="text-slate-200">rhythms.json</strong> • Áudios: <strong className="text-slate-200">public/samples/</strong>
+            Biblioteca: <strong className="text-slate-200">Neon</strong> • Cache de áudio: <strong className="text-slate-200">IndexedDB</strong>
           </span>
           <button
             type="button"

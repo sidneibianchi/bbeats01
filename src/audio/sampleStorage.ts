@@ -5,11 +5,18 @@
  * Retains custom audio files and mic recordings across all devices (PC, mobile, tablet).
  */
 
-import { BUILT_IN_SAMPLES } from '../presets/defaultSamples';
-
 const DB_NAME = 'beatbuddy_studio_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'custom_samples';
+const LOCAL_RHYTHM_SAMPLE_KEYS = [
+  'beatbuddy_rhythms',
+  'beatbuddy_active_rhythm_id',
+  'beatbuddy_deleted_samples',
+  'beatbuddy_sample_order',
+  'beatbuddy_sample_folders',
+  'beatbuddy_user_folders_list',
+  'beatbuddy_user_subfolders_list',
+] as const;
 
 export interface StoredSampleRecord {
   id: string;
@@ -66,7 +73,9 @@ export function blobToBase64(blob: Blob): Promise<string> {
 export async function saveSampleToStorage(
   id: string,
   name: string,
-  blob: Blob
+  blob: Blob,
+  folder?: string,
+  subFolder?: string
 ): Promise<void> {
   try {
     const db = await openDatabase();
@@ -79,6 +88,8 @@ export async function saveSampleToStorage(
         blob,
         mimeType: blob.type || 'audio/wav',
         createdAt: Date.now(),
+        folder,
+        subFolder,
       };
       const req = store.put(record);
       req.onsuccess = () => resolve();
@@ -109,6 +120,25 @@ export async function getAllStoredSamples(): Promise<StoredSampleRecord[]> {
   } catch (err) {
     console.error('Failed to load samples from IndexedDB:', err);
     return [];
+  }
+}
+
+export async function clearLocalRhythmAndSampleCache(): Promise<void> {
+  const db = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      transaction.objectStore(STORE_NAME).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Failed to clear local samples'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Local sample cleanup was aborted'));
+    });
+  } finally {
+    db.close();
+  }
+
+  for (const key of LOCAL_RHYTHM_SAMPLE_KEYS) {
+    localStorage.removeItem(key);
   }
 }
 
@@ -366,20 +396,6 @@ export async function syncSamplesFromServer(): Promise<number> {
         !deletedSet.has((s.fileName || '').toLowerCase())
     );
 
-    // Only inject built-in catalog if there are NO server samples AND no deleted samples (fresh install)
-    if (serverSamples.length === 0 && deletedSet.size === 0) {
-      for (const b of BUILT_IN_SAMPLES) {
-        serverSamples.push({
-          id: b.id,
-          name: b.name,
-          fileName: b.fileName,
-          mimeType: b.mimeType,
-          size: b.size,
-          createdAt: 1791929936800,
-        });
-      }
-    }
-
     if (serverSamples.length === 0) return 0;
 
     const localSamples = await getAllStoredSamples();
@@ -495,7 +511,7 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
     if (staticResp.ok && !isHtmlResponse(staticResp)) {
       const list = await staticResp.json();
       if (Array.isArray(list)) {
-        return list;
+        return list.length > 0 ? list : null;
       }
     }
   } catch (err) {
@@ -588,7 +604,13 @@ export async function exportFullLibraryBackup(): Promise<void> {
       name: s.name,
       mimeType: s.mimeType,
       audioBase64: await blobToBase64(s.blob),
+      folder: s.folder,
+      subFolder: s.subFolder,
     }))
+  );
+
+  const localSettings = Object.fromEntries(
+    LOCAL_RHYTHM_SAMPLE_KEYS.map((key) => [key, localStorage.getItem(key)])
   );
 
   const backupData = {
@@ -597,6 +619,7 @@ export async function exportFullLibraryBackup(): Promise<void> {
     exportedAt: new Date().toISOString(),
     rhythms,
     samples: samplesWithAudio,
+    localSettings,
   };
 
   const blob = new Blob([JSON.stringify(backupData, null, 2)], {
@@ -638,8 +661,18 @@ export async function importFullLibraryBackup(file: File): Promise<{
     for (const s of data.samples) {
       if (s.id && s.name && s.audioBase64) {
         const blob = localBase64ToBlob(s.audioBase64, s.mimeType || 'audio/wav');
-        await saveSampleToStorage(s.id, s.name, blob);
+        await saveSampleToStorage(s.id, s.name, blob, s.folder, s.subFolder);
         samplesCount++;
+      }
+    }
+  }
+
+  if (data.localSettings && typeof data.localSettings === 'object' && !Array.isArray(data.localSettings)) {
+    for (const key of LOCAL_RHYTHM_SAMPLE_KEYS) {
+      const value = data.localSettings[key];
+      if (value === null || typeof value === 'string') {
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
       }
     }
   }
