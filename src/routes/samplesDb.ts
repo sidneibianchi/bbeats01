@@ -2,13 +2,48 @@ import { PrismaClient } from '@prisma/client';
 import type { Express, Request, Response } from 'express';
 
 const prisma = new PrismaClient();
+let _prismaShutdownHandlersInstalled = false;
+
+function installPrismaShutdownHandlers() {
+  if (_prismaShutdownHandlersInstalled) return;
+  _prismaShutdownHandlersInstalled = true;
+
+  process.on('SIGINT', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (SIGINT)');
+    } finally {
+      process.exit(0);
+    }
+  });
+
+  process.on('SIGTERM', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (SIGTERM)');
+    } finally {
+      process.exit(0);
+    }
+  });
+
+  process.on('beforeExit', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (beforeExit)');
+    } catch {}
+  });
+}
 
 export function registerSampleDbRoutes(app: Express) {
+  // ensure shutdown handlers are installed only once
+  installPrismaShutdownHandlers();
+
   app.get('/api/samples/db', async (_req: Request, res: Response) => {
     try {
       const samples = await prisma.sample.findMany({
         orderBy: { createdAt: 'desc' },
       });
+
       res.json({ success: true, samples });
     } catch (error) {
       console.error('Failed to list samples from db:', error);
