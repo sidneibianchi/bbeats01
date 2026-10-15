@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { deleteSharedRhythm } from '../../src/lib/rhythmDb';
+import { deleteSharedRhythm } from '../../src/lib/rhythmDb.js';
 
 type VercelRequest = IncomingMessage & {
   url?: string;

@@ -4,7 +4,7 @@ import {
   listSharedRhythms,
   RhythmValidationError,
   saveSharedRhythms,
-} from '../src/lib/rhythmDb';
+} from '../src/lib/rhythmDb.js';
 
 type VercelRequest = IncomingMessage & {
   body?: unknown;
