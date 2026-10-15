@@ -40,6 +40,7 @@ import {
 } from '../audio/sampleStorage';
 import { SongProject } from '../types/rhythm';
 import { isSampleUsedInRhythms } from '../audio/sampleUsage';
+import { saveSampleToDatabase } from '../lib/uploadSample';
 
 interface SamplesLibraryViewProps {
   onAddTrackWithSample: (sampleId: string, sampleName: string) => void;
@@ -250,11 +251,18 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
     try {
       const folderToAssign = activeFolderFilter !== 'all' ? activeFolderFilter : 'Percussão';
       const subFolderToAssign = activeSubFolderFilter !== 'all' ? activeSubFolderFilter : undefined;
+      let cloudFailures = 0;
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setStatusMessage(`Processando sample "${file.name}"...`);
         const id = await audioEngine.loadSampleFromBlob(file, file.name);
+        try {
+          await saveSampleToDatabase(file, id);
+        } catch (error) {
+          cloudFailures++;
+          console.error(`Failed to sync sample "${file.name}" to cloud:`, error);
+        }
 
         // Assign folder
         const updated = {
@@ -267,7 +275,11 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
         audioEngine.triggerInstrument('custom', { volume: 0.9 }, id);
       }
       refreshList();
-      setStatusMessage(`Samples carregados e organizados na pasta "${folderToAssign}"!`);
+      const cloudWarning =
+        cloudFailures > 0
+          ? ` Falha ao sincronizar ${cloudFailures} sample(s) com a nuvem; os arquivos locais foram mantidos.`
+          : '';
+      setStatusMessage(`Samples carregados e organizados na pasta "${folderToAssign}"!${cloudWarning}`);
     } catch {
       setStatusMessage('Erro ao decodificar arquivo de áudio.');
     }
@@ -296,20 +308,36 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
       mediaRecorder.onstop = async () => {
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const name = `Gravação_Voz_${new Date().toLocaleTimeString('pt-BR')}`;
-        const id = await audioEngine.loadSampleFromBlob(blob, name);
+        try {
+          const id = await audioEngine.loadSampleFromBlob(blob, name);
+          let cloudWarning = '';
+          try {
+            await saveSampleToDatabase(
+              new File([blob], `${name}.webm`, { type: blob.type }),
+              id
+            );
+          } catch (error) {
+            console.error('Failed to sync recording to cloud:', error);
+            cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+          }
 
-        const folderToAssign = activeFolderFilter !== 'all' ? activeFolderFilter : 'Efeitos';
-        const updated = {
-          ...sampleFolders,
-          [id]: { folder: folderToAssign, subFolder: 'Voz' },
-        };
-        saveSampleFolders(updated);
-        updateSampleFolderInStorage(id, folderToAssign, 'Voz');
+          const folderToAssign = activeFolderFilter !== 'all' ? activeFolderFilter : 'Efeitos';
+          const updated = {
+            ...sampleFolders,
+            [id]: { folder: folderToAssign, subFolder: 'Voz' },
+          };
+          saveSampleFolders(updated);
+          updateSampleFolderInStorage(id, folderToAssign, 'Voz');
 
-        refreshList();
-        setStatusMessage(`Sample "${name}" gravado na pasta "${folderToAssign}"!`);
-        audioEngine.triggerInstrument('custom', { volume: 0.9 }, id);
-        stream.getTracks().forEach((t) => t.stop());
+          refreshList();
+          setStatusMessage(`Sample "${name}" gravado na pasta "${folderToAssign}"!${cloudWarning}`);
+          audioEngine.triggerInstrument('custom', { volume: 0.9 }, id);
+        } catch (error) {
+          console.error('Failed to process sample recording:', error);
+          setStatusMessage('Falha ao processar gravação de voz.');
+        } finally {
+          stream.getTracks().forEach((t) => t.stop());
+        }
       };
 
       setIsRecording(true);
@@ -346,7 +374,7 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
 
     try {
       // 1. Delete from AudioEngine cache and internal buffers
-      await audioEngine.deleteCustomSample(sampleId);
+      await audioEngine.deleteCustomSample(sampleId, sampleName);
 
       // 2. Delete from persistent IndexedDB and triggers DELETE on /api/samples/:id (which deletes from disk and index.json)
       await deleteSampleFromStorage(sampleId, sampleName);

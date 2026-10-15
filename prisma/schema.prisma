@@ -1,0 +1,29 @@
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Sample {
+  id        String   @id @default(cuid())
+  title     String?
+  filename  String
+  fileUrl   String
+  fileKey   String   @unique
+  localSampleId String? @unique
+  mimeType  String?
+  duration  Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Rhythm {
+  id        String   @id
+  data      Json     @db.JsonB
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

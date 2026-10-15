@@ -70,6 +70,7 @@ export default function App() {
   };
 
   const isDeletingRhythmRef = useRef(false);
+  const skipNextRhythmAutosaveRef = useRef(false);
 
   const createBlankRhythm = (): SongProject => ({
     id: `rhythm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -142,6 +143,7 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<'sequencer' | 'pedal' | 'samples'>('sequencer');
+  const [isServerLoaded, setIsServerLoaded] = useState(false);
   const [activePartId, setActivePartId] = useState<SongPartId>('verse');
   const [playingPartId, setPlayingPartId] = useState<SongPartId>('verse');
   const [isPlaying, setIsPlaying] = useState(false);
@@ -169,6 +171,7 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
   const [isSavedRecently, setIsSavedRecently] = useState(false);
   const isServerLoadedRef = useRef(false);
+  const rhythmSaveTimerRef = useRef<number | null>(null);
 
   // Pedal toast notification & physical states
   const [pedalToast, setPedalToast] = useState<{ msg: string; timestamp: number } | null>(null);
@@ -304,9 +307,15 @@ export default function App() {
           setProject(targetRhythm);
           audioEngine.updateProject(targetRhythm);
         }
+      } else if (remoteRhythms && Array.isArray(remoteRhythms)) {
+        setRhythms([]);
+        localStorage.setItem('beatbuddy_rhythms', JSON.stringify([]));
+        const blankProject = createBlankRhythm();
+        skipNextRhythmAutosaveRef.current = true;
+        setProject(blankProject);
+        audioEngine.updateProject(blankProject);
       } else {
-        // First time initialization only: upload local presets to rhythms.json
-        await saveRhythmsToServer(rhythms);
+        triggerPedalToast('Não foi possível carregar os ritmos remotos; a cópia local foi preservada.');
       }
 
       // 3. Pre-load all samples directly into audio buffers for immediate mobile playback
@@ -320,12 +329,15 @@ export default function App() {
       setCustomSamplesList(audioEngine.getCustomSamplesList());
 
       isServerLoadedRef.current = true;
+      setIsServerLoaded(true);
       setLastSyncTime(Date.now());
     } catch (err) {
       console.warn('Sync attempt finished with warnings:', err);
       isServerLoadedRef.current = true;
     } finally {
       setIsSyncing(false);
+      isServerLoadedRef.current = true;
+      setIsServerLoaded(true);
     }
   };
 
@@ -356,6 +368,10 @@ export default function App() {
   useEffect(() => {
     if (isDeletingRhythmRef.current) return;
     audioEngine.updateProject(project);
+    if (skipNextRhythmAutosaveRef.current) {
+      skipNextRhythmAutosaveRef.current = false;
+      return;
+    }
 
     // Save project changes to rhythms library and localStorage
     setRhythms((prevList) => {
@@ -369,8 +385,15 @@ export default function App() {
         localStorage.setItem('beatbuddy_active_rhythm_id', project.id);
         // Only save to server once initial load has completed to avoid overwriting with defaults
         if (isServerLoadedRef.current) {
-          saveRhythmsToServer(nextList).catch(() => {});
-          saveActiveRhythmToServer(project.id).catch(() => {});
+          if (rhythmSaveTimerRef.current !== null) {
+            window.clearTimeout(rhythmSaveTimerRef.current);
+          }
+          rhythmSaveTimerRef.current = window.setTimeout(() => {
+            void saveRhythmsToServer(nextList).then((saved) => {
+              if (!saved) triggerPedalToast('Falha ao sincronizar as alterações do ritmo com o Neon.');
+            });
+          }, 600);
+          void saveActiveRhythmToServer(project.id);
         }
       } catch (e) {
         console.error('Failed to save rhythms to localStorage', e);
@@ -378,6 +401,12 @@ export default function App() {
       return nextList;
     });
   }, [project]);
+
+  useEffect(() => () => {
+    if (rhythmSaveTimerRef.current !== null) {
+      window.clearTimeout(rhythmSaveTimerRef.current);
+    }
+  }, []);
 
   // Primary action: Save rhythm directly to App & Cloud
   const handleSaveProjectToApp = async () => {
@@ -391,12 +420,16 @@ export default function App() {
       localStorage.setItem('beatbuddy_active_rhythm_id', project.id);
 
       // Persist to server
-      await saveRhythmsToServer(nextList);
+      const saved = await saveRhythmsToServer(nextList);
+      if (!saved) {
+        triggerPedalToast('Falha ao salvar no Neon. A cópia local foi mantida.');
+        return;
+      }
       await saveActiveRhythmToServer(project.id);
       await syncSamplesFromServer();
 
       setIsSavedRecently(true);
-      triggerPedalToast(`💾 Ritmo "${project.name}" salvo no arquivo JSON e na memória local do App!`);
+      triggerPedalToast(`Ritmo "${project.name}" salvo na biblioteca compartilhada.`);
       setTimeout(() => setIsSavedRecently(false), 2500);
     } catch (err) {
       console.error('Failed to save rhythm to app:', err);
@@ -418,10 +451,12 @@ export default function App() {
     }
   };
 
-  const handleRhythmsUpdated = (newRhythms: SongProject[]) => {
+  const handleRhythmsUpdated = async (newRhythms: SongProject[]): Promise<boolean> => {
     setRhythms(newRhythms);
     localStorage.setItem('beatbuddy_rhythms', JSON.stringify(newRhythms));
-    saveRhythmsToServer(newRhythms).catch(() => {});
+    const saved = await saveRhythmsToServer(newRhythms);
+    if (!saved) triggerPedalToast('Falha ao atualizar o Neon; a cópia local foi mantida.');
+    return saved;
     const exists = newRhythms.find((r) => r.id === project.id);
     if (!exists && newRhythms.length > 0) {
       setProject(newRhythms[0]);
@@ -537,9 +572,6 @@ export default function App() {
     let lastPedal1ReleaseTimestamp = 0;
     let pressTimer: number | null = null;
     let lastPedal2PressTime = 0;
-    let lastPedalTriggerTime = 0;
-    let isUserTouching = false;
-    let lastScrollY = window.scrollY || document.documentElement.scrollTop || 0;
 
     // PEDAL 1 (Principal):
     // IN STOP: TAP -> Inicia Intro e avança para Parte A (com trava de partida)
@@ -870,15 +902,6 @@ export default function App() {
       );
     };
 
-    const handleTouchStart = () => {
-      isUserTouching = true;
-    };
-    const handleTouchEnd = () => {
-      setTimeout(() => {
-        isUserTouching = false;
-      }, 200);
-    };
-
     const handleKeyDown = (e: KeyboardEvent) => {
       // 1. If user is inside footswitch config learning a key, let the modal handle it
       if (footswitchManager.getLearningTarget() !== null) {
@@ -922,7 +945,6 @@ export default function App() {
       if (isPedal1) {
         e.preventDefault();
         e.stopPropagation();
-        lastPedalTriggerTime = Date.now();
         footswitchManager.notifyActivity({
           type: 'key',
           value: `PEDAL 1 (${keyLabel}) -> Disparado!`,
@@ -931,7 +953,6 @@ export default function App() {
       } else if (isPedal2) {
         e.preventDefault();
         e.stopPropagation();
-        lastPedalTriggerTime = Date.now();
         footswitchManager.notifyActivity({
           type: 'key',
           value: `PEDAL 2 (${keyLabel}) -> Disparado!`,
@@ -981,46 +1002,6 @@ export default function App() {
       }
     };
 
-    // HARDWARE SCROLL INTERCEPTOR (Android Chrome Fallback)
-    // Only triggers if native browser swallowed key event completely (no keydown in last 800ms)
-    const handleNativePageScroll = () => {
-      if (!isPedalEnabledRef.current || isModalOpenRef.current) {
-        return;
-      }
-      const currentY = window.scrollY || document.documentElement.scrollTop || 0;
-      const delta = currentY - lastScrollY;
-      const now = Date.now();
-
-      if (!isUserTouching && Math.abs(delta) > 70 && now - lastPedalTriggerTime > 800) {
-        lastPedalTriggerTime = now;
-        if (delta > 0) {
-          // PageDown
-          footswitchManager.notifyActivity({
-            type: 'key',
-            value: 'PEDAL 1 (PageDown via Scroll)',
-          });
-          handlePedal1Down(false);
-          setTimeout(handlePedal1Up, 150);
-        } else {
-          // PageUp
-          footswitchManager.notifyActivity({
-            type: 'key',
-            value: 'PEDAL 2 (PageUp via Scroll)',
-          });
-          handlePedal2Down();
-          setTimeout(handlePedal2Up, 150);
-        }
-
-        window.scrollTo({ top: lastScrollY, behavior: 'instant' as ScrollBehavior });
-        return;
-      }
-      lastScrollY = currentY;
-    };
-
-    window.addEventListener('touchstart', handleTouchStart, { passive: true });
-    window.addEventListener('touchend', handleTouchEnd, { passive: true });
-    window.addEventListener('scroll', handleNativePageScroll, { passive: false });
-
     // Single authoritative window capture listener (no duplicate on document!)
     window.addEventListener('keydown', handleKeyDown, { capture: true, passive: false });
     window.addEventListener('keyup', handleKeyUp, { capture: true, passive: false });
@@ -1028,9 +1009,6 @@ export default function App() {
     return () => {
       if (pressTimer) clearTimeout(pressTimer);
       if (pedal1SingleTapTimer) clearTimeout(pedal1SingleTapTimer);
-      window.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchend', handleTouchEnd);
-      window.removeEventListener('scroll', handleNativePageScroll);
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('keyup', handleKeyUp, { capture: true });
     };
@@ -1206,7 +1184,9 @@ export default function App() {
     setRhythms(updatedList);
     try {
       localStorage.setItem('beatbuddy_rhythms', JSON.stringify(updatedList));
-      saveRhythmsToServer(updatedList).catch(() => {});
+      void saveRhythmsToServer(updatedList).then((saved) => {
+        if (!saved) triggerPedalToast('Ritmo criado localmente, mas não foi salvo no Neon.');
+      });
     } catch (e) {
       console.error(e);
     }
@@ -1290,6 +1270,12 @@ export default function App() {
   };
 
   const handleDeleteRhythm = async (rhythmId: string) => {
+    const deletedRemotely = await deleteRhythmFromServer(rhythmId);
+    if (!deletedRemotely) {
+      triggerPedalToast('Não foi possível excluir o ritmo no Neon. Tente novamente.');
+      return;
+    }
+
     isDeletingRhythmRef.current = true;
     audioEngine.stop();
 
@@ -1323,10 +1309,12 @@ export default function App() {
     try {
       localStorage.setItem('beatbuddy_rhythms', JSON.stringify(finalList));
       localStorage.setItem('beatbuddy_active_rhythm_id', nextActive.id);
-      await deleteRhythmFromServer(rhythmId);
-      await saveRhythmsToServer(finalList);
+      if (nextList.length === 0) {
+        const saved = await saveRhythmsToServer(finalList);
+        if (!saved) throw new Error('The replacement rhythm could not be saved to Neon.');
+      }
       await saveActiveRhythmToServer(nextActive.id);
-      triggerPedalToast(`🗑️ Ritmo "${rhythmName}" excluído com sucesso do arquivo JSON!`);
+      triggerPedalToast(`Ritmo "${rhythmName}" excluído da biblioteca compartilhada.`);
     } catch (e) {
       console.error('Failed to delete rhythm:', e);
     } finally {
@@ -1507,7 +1495,7 @@ export default function App() {
     });
   };
 
-  const handleDeleteSample = (sampleId: string) => {
+  const handleDeleteSample = async (sampleId: string) => {
     const sampleRecord = customSamplesList.find((s) => s.id === sampleId);
     const sampleName = sampleRecord?.name || sampleId;
     const usage = isSampleUsedInRhythms(sampleId, sampleName, rhythms);
@@ -1518,21 +1506,30 @@ export default function App() {
       return;
     }
 
-    audioEngine.deleteCustomSample(sampleId);
-    setProject((prev) => ({
-      ...prev,
-      tracks: prev.tracks.map((t) =>
-        t.customSampleId === sampleId
-          ? {
-              ...t,
-              customSampleId: undefined,
-              customSampleName: undefined,
-              soundType: 'kick',
-            }
-          : t
-      ),
-    }));
-    triggerPedalToast(`🗑️ Sample "${sampleName}" excluído com sucesso do disco e do JSON!`);
+    try {
+      await audioEngine.deleteCustomSample(sampleId, sampleName);
+      setProject((prev) => ({
+        ...prev,
+        tracks: prev.tracks.map((t) =>
+          t.customSampleId === sampleId
+            ? {
+                ...t,
+                customSampleId: undefined,
+                customSampleName: undefined,
+                soundType: 'kick',
+              }
+            : t
+        ),
+      }));
+      triggerPedalToast(`🗑️ Sample "${sampleName}" excluído do armazenamento local e da nuvem.`);
+    } catch (error) {
+      console.error('Failed to delete sample:', error);
+      triggerPedalToast(
+        error instanceof Error
+          ? `Não foi possível excluir "${sampleName}": ${error.message}`
+          : `Não foi possível excluir "${sampleName}".`
+      );
+    }
   };
 
   const handleRenameSample = (sampleId: string, newName: string) => {
@@ -2211,7 +2208,7 @@ export default function App() {
         samplesCount={customSamplesList.length}
       />
 
-      {/* Central de Arquivos Locais (JSON & Pasta de Samples - Sem Banco de Dados) */}
+      {/* Shared rhythm library, JSON backups, and local sample manager */}
       <LocalFileManagerModal
         isOpen={isLocalFileManagerOpen}
         onClose={() => setIsLocalFileManagerOpen(false)}

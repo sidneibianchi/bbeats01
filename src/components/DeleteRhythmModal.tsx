@@ -46,7 +46,7 @@ export const DeleteRhythmModal: React.FC<DeleteRhythmModalProps> = ({
             <strong className="text-white font-bold">"{rhythm.name}"</strong>?
           </p>
           <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-300 leading-relaxed">
-            Esta ação excluirá este ritmo do arquivo <span className="font-mono font-bold text-amber-300">rhythms.json</span> e de toda a memória do aplicativo.
+            Esta ação excluirá este ritmo da biblioteca compartilhada no Neon. A cópia JSON baixada anteriormente não será alterada.
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">

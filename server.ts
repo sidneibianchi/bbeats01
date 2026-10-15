@@ -1,8 +1,11 @@
+import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { registerSampleDbRoutes } from './src/routes/samplesDb';
+import { registerRhythmDbRoutes } from './src/routes/rhythmsDb';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,10 +17,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
+registerSampleDbRoutes(app);
+
 // Data storage paths
 const DATA_DIR = path.resolve(__dirname, 'data');
 const SAMPLES_DIR = path.resolve(DATA_DIR, 'samples');
-const RHYTHMS_FILE = path.resolve(DATA_DIR, 'rhythms.json');
 const SAMPLES_INDEX_FILE = path.resolve(DATA_DIR, 'samples_index.json');
 
 // Ensure storage directories exist
@@ -40,44 +44,8 @@ interface StoredSampleMeta {
 }
 
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
-const PUBLIC_RHYTHMS_FILE = path.resolve(PUBLIC_DIR, 'rhythms.json');
 const PUBLIC_SAMPLES_INDEX_FILE = path.resolve(PUBLIC_DIR, 'samples/index.json');
 const PUBLIC_ACTIVE_RHYTHM_FILE = path.resolve(PUBLIC_DIR, 'active_rhythm.json');
-
-function loadRhythms(): unknown[] {
-  try {
-    if (fs.existsSync(RHYTHMS_FILE)) {
-      const data = fs.readFileSync(RHYTHMS_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (err) {
-    console.error('Error loading rhythms.json:', err);
-  }
-  try {
-    if (fs.existsSync(PUBLIC_RHYTHMS_FILE)) {
-      const data = fs.readFileSync(PUBLIC_RHYTHMS_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (err) {
-    console.error('Error loading public/rhythms.json:', err);
-  }
-  return [];
-}
-
-function saveRhythms(rhythms: unknown[]) {
-  try {
-    const jsonStr = JSON.stringify(rhythms, null, 2);
-    fs.writeFileSync(RHYTHMS_FILE, jsonStr, 'utf-8');
-    if (!fs.existsSync(PUBLIC_DIR)) {
-      fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-    }
-    fs.writeFileSync(PUBLIC_RHYTHMS_FILE, jsonStr, 'utf-8');
-  } catch (err) {
-    console.error('Error saving rhythms.json:', err);
-  }
-}
 
 function loadSamplesMeta(): StoredSampleMeta[] {
   try {
@@ -117,47 +85,7 @@ function saveSamplesMeta(metaList: StoredSampleMeta[]) {
 
 // ================= API ENDPOINTS ================= //
 
-// 1. Get all synced rhythms
-app.get('/api/rhythms', (_req: Request, res: Response) => {
-  const list = loadRhythms();
-  res.json({ success: true, rhythms: list });
-});
-
-// 2. Save all synced rhythms (called whenever a rhythm is created, modified or deleted)
-app.post('/api/rhythms', (req: Request, res: Response) => {
-  const { rhythms } = req.body;
-  if (!Array.isArray(rhythms)) {
-    res.status(400).json({ success: false, error: 'Expected rhythms array' });
-    return;
-  }
-  saveRhythms(rhythms);
-  res.json({ success: true, count: rhythms.length });
-});
-
-// 2.1 Delete a specific rhythm by ID
-app.delete('/api/rhythms/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
-  const list = loadRhythms() as Array<{ id: string }>;
-  const filtered = list.filter((r) => r.id !== id);
-  saveRhythms(filtered);
-
-  // Update active rhythm if it was pointing to the deleted rhythm
-  try {
-    if (fs.existsSync(ACTIVE_RHYTHM_FILE)) {
-      const activeData = JSON.parse(fs.readFileSync(ACTIVE_RHYTHM_FILE, 'utf-8'));
-      if (activeData.rhythmId === id) {
-        const nextId = filtered[0]?.id || null;
-        const str = JSON.stringify({ rhythmId: nextId });
-        fs.writeFileSync(ACTIVE_RHYTHM_FILE, str, 'utf-8');
-        fs.writeFileSync(PUBLIC_ACTIVE_RHYTHM_FILE, str, 'utf-8');
-      }
-    }
-  } catch (err) {
-    console.error('Failed to update active rhythm after deletion:', err);
-  }
-
-  res.json({ success: true, count: filtered.length });
-});
+registerRhythmDbRoutes(app);
 
 // 2.2 Get & Set active rhythm
 const ACTIVE_RHYTHM_FILE = path.resolve(DATA_DIR, 'active_rhythm.json');
