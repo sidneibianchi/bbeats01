@@ -1,11 +1,5 @@
-import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged,
-  type User 
+  type User
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -16,12 +10,10 @@ import {
   setDoc,
   deleteDoc
 } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import { app, firebaseConfig } from './firebaseApp';
+import { auth, googleProvider, onAuthStateChanged, signInWithPopup, signOut } from './firebaseAuth';
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
-export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 export enum OperationType {
   CREATE = 'create',
@@ -80,4 +72,16 @@ export async function testConnection(): Promise<void> {
   }
 }
 
-export { signInWithPopup, signOut, onAuthStateChanged, type User, doc, collection, getDocs, setDoc, deleteDoc };
+export {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  type User,
+  doc,
+  collection,
+  getDocs,
+  setDoc,
+  deleteDoc,
+};

@@ -18,6 +18,7 @@ import {
 import { TrackDefinition, SongProject } from '../types/rhythm';
 import { audioEngine } from '../audio/AudioEngine';
 import { isSampleUsedInRhythms } from '../audio/sampleUsage';
+import { saveSampleToDatabase } from '../lib/uploadSample';
 
 interface SampleManagerModalProps {
   track: TrackDefinition;
@@ -59,16 +60,25 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
       return;
     }
 
-    await audioEngine.deleteCustomSample(sampleId);
-    if (track.customSampleId === sampleId) {
-      onUpdateTrackParams(track.id, {
-        customSampleId: undefined,
-        customSampleName: undefined,
-        soundType: track.soundType === 'custom' ? 'kick' : track.soundType,
-      });
+    try {
+      await audioEngine.deleteCustomSample(sampleId, sampleName);
+      if (track.customSampleId === sampleId) {
+        onUpdateTrackParams(track.id, {
+          customSampleId: undefined,
+          customSampleName: undefined,
+          soundType: track.soundType === 'custom' ? 'kick' : track.soundType,
+        });
+      }
+      refreshSamples();
+      setStatusMsg(`Sample "${sampleName}" excluído do armazenamento local e da nuvem.`);
+    } catch (error) {
+      console.error('Failed to delete sample:', error);
+      setStatusMsg(
+        error instanceof Error
+          ? `Não foi possível excluir "${sampleName}": ${error.message}`
+          : `Não foi possível excluir "${sampleName}".`
+      );
     }
-    refreshSamples();
-    setStatusMsg(`Sample "${sampleName}" excluído com sucesso do disco e do JSON.`);
   };
 
   const handleStartRename = (sampleId: string, currentName: string) => {
@@ -121,12 +131,19 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
     try {
       setStatusMsg(`Carregando "${file.name}"...`);
       const sampleId = await audioEngine.loadSampleFromBlob(file, file.name);
+      let cloudWarning = '';
+      try {
+        await saveSampleToDatabase(file, sampleId);
+      } catch (error) {
+        console.error('Failed to sync sample to cloud:', error);
+        cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+      }
       onUpdateTrackParams(track.id, {
         customSampleId: sampleId,
         customSampleName: file.name,
         soundType: 'custom',
       });
-      setStatusMsg(`Sample "${file.name}" carregado com sucesso!`);
+      setStatusMsg(`Sample "${file.name}" carregado com sucesso!${cloudWarning}`);
       refreshSamples();
       audioEngine.triggerInstrument('custom', { volume: 0.9 }, sampleId);
     } catch {
@@ -161,13 +178,23 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
         try {
           const recName = `Gravação_${new Date().toLocaleTimeString('pt-BR')}`;
           const sampleId = await audioEngine.loadSampleFromBlob(audioBlob, recName);
+          let cloudWarning = '';
+          try {
+            await saveSampleToDatabase(
+              new File([audioBlob], `${recName}.webm`, { type: audioBlob.type }),
+              sampleId
+            );
+          } catch (error) {
+            console.error('Failed to sync recording to cloud:', error);
+            cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+          }
           onUpdateTrackParams(track.id, {
             customSampleId: sampleId,
             customSampleName: recName,
             soundType: 'custom',
           });
           refreshSamples();
-          setStatusMsg(`Gravação registrada com sucesso!`);
+          setStatusMsg(`Gravação registrada com sucesso!${cloudWarning}`);
           audioEngine.triggerInstrument('custom', { volume: 0.9 }, sampleId);
         } catch {
           setStatusMsg('Erro ao processar gravação de voz.');

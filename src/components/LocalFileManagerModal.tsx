@@ -1,7 +1,7 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * Central de Arquivos Locais (Sem Banco de Dados)
+ * Shared rhythm library, JSON backups, and local audio storage manager.
  * Permite exportar/importar rhythms.json, kits.json, backup completo e gerenciar a pasta de samples.
  */
 
@@ -30,7 +30,7 @@ interface LocalFileManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   rhythms: SongProject[];
-  onRhythmsUpdated: (newRhythms: SongProject[]) => void;
+  onRhythmsUpdated: (newRhythms: SongProject[]) => Promise<boolean>;
   onOpenSamplesLibrary: () => void;
   onShowToast: (message: string) => void;
 }
@@ -95,7 +95,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
     }
   };
 
-  // 3. Save rhythms to app's local file on disk (/data/rhythms.json e /public/rhythms.json)
+  // Save the shared rhythm library remotely and keep a browser cache.
   const handleSaveToAppFile = async () => {
     setIsProcessing(true);
     try {
@@ -104,15 +104,15 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
       if (ok) {
         setFeedback({
           type: 'success',
-          message: 'Gravado com sucesso no arquivo rhythms.json do próprio app!',
+          message: 'Biblioteca compartilhada gravada no Neon.',
         });
-        onShowToast('💾 Salvo no arquivo rhythms.json do próprio app!');
+        onShowToast('Biblioteca compartilhada gravada no Neon.');
       } else {
         setFeedback({
-          type: 'success',
-          message: 'Gravado na memória local do navegador (IndexedDB/LocalStorage).',
+          type: 'error',
+          message: 'Cópia local mantida, mas não foi possível gravar no Neon. Tente novamente.',
         });
-        onShowToast('💾 Gravado na memória local do app!');
+        onShowToast('Não foi possível publicar os ritmos compartilhados.');
       }
     } catch {
       setFeedback({ type: 'error', message: 'Erro ao salvar no arquivo local.' });
@@ -159,14 +159,18 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
 
       const mergedList = Array.from(map.values());
       localStorage.setItem('beatbuddy_rhythms', JSON.stringify(mergedList));
-      await saveRhythmsToServer(mergedList);
-
-      onRhythmsUpdated(mergedList);
+      const savedRemotely = await onRhythmsUpdated(mergedList);
       setFeedback({
-        type: 'success',
-        message: `Sucesso! Importados ${importedRhythms.length} ritmos do arquivo "${file.name}". Total de ritmos no app: ${mergedList.length}.`,
+        type: savedRemotely ? 'success' : 'error',
+        message: savedRemotely
+          ? `Importados ${importedRhythms.length} ritmos para o Neon. Total: ${mergedList.length}.`
+          : `Importados ${importedRhythms.length} ritmos apenas localmente. Não foi possível publicá-los no Neon.`,
       });
-      onShowToast(`✅ Importados ${importedRhythms.length} ritmos do JSON!`);
+      onShowToast(
+        savedRemotely
+          ? `Importados ${importedRhythms.length} ritmos para a biblioteca compartilhada.`
+          : 'Importação local concluída, mas não foi possível publicar no Neon.'
+      );
     } catch (err) {
       setFeedback({
         type: 'error',
@@ -210,13 +214,20 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          onRhythmsUpdated(parsed);
+          const savedRemotely = await onRhythmsUpdated(parsed);
+          if (!savedRemotely) {
+            setFeedback({
+              type: 'error',
+              message: 'Backup restaurado localmente, mas os ritmos não foram publicados no Neon.',
+            });
+            return;
+          }
         }
       }
 
       setFeedback({
         type: 'success',
-        message: `Backup restaurado! ${res.rhythmsCount} ritmos e ${res.samplesCount} sons de áudio importados.`,
+        message: `Backup restaurado e ritmos publicados! ${res.rhythmsCount} ritmos e ${res.samplesCount} sons de áudio importados.`,
       });
       onShowToast(`📦 Backup restaurado com sucesso!`);
     } catch {
@@ -240,11 +251,11 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                 Arquivos Locais & Pastas do App
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  Sem Banco de Dados
+                  Neon + backups
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                100% no próprio app: ritmos em arquivo JSON e samples na pasta local
+                Ritmos compartilhados no Neon; JSON para backup e samples no armazenamento local.
               </p>
             </div>
           </div>
@@ -304,10 +315,10 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
             <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <div className="text-xs space-y-1">
               <p className="font-bold text-emerald-200">
-                Armazenamento 100% Autônomo e Local
+                Biblioteca compartilhada com cache local
               </p>
               <p className="text-slate-300 leading-relaxed">
-                O aplicativo não depende de nenhum banco de dados externo ou servidor em nuvem. Todos os ritmos são gravados no arquivo <strong className="text-amber-300">rhythms.json</strong> e os áudios na pasta <strong className="text-cyan-300">public/samples/</strong> e na memória offline do seu navegador (IndexedDB).
+                Os ritmos compartilhados são armazenados no Neon e podem ser editados por usuários autenticados. O navegador mantém um cache local; use o JSON para importar/exportar backups. Samples continuam no armazenamento de áudio e no IndexedDB.
               </p>
             </div>
           </div>
@@ -346,7 +357,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                   <div>
                     <h4 className="text-sm font-bold text-white flex items-center gap-2">
                       <FileCode className="w-4 h-4 text-amber-400" />
-                      Arquivo de Ritmos (rhythms.json)
+                      Biblioteca de Ritmos
                     </h4>
                     <p className="text-xs text-slate-400 mt-0.5">
                       Atualmente há <strong>{rhythms.length} ritmos</strong> carregados no app.
@@ -359,7 +370,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                     className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-400/20 text-amber-300 hover:bg-amber-400 hover:text-slate-950 border border-amber-400/40 transition-colors cursor-pointer flex items-center gap-1.5"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-                    <span>Gravar no App</span>
+                    <span>Salvar Biblioteca</span>
                   </button>
                 </div>
 

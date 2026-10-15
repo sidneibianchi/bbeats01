@@ -5,7 +5,7 @@
  * Features numeric keypad jump (N. Ritmo), categories, arrow navigation, and responsive footswitches.
  */
 
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useLayoutEffect } from 'react';
 import {
   Volume2,
   VolumeX,
@@ -160,6 +160,85 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
 }) => {
   // Modal state for numeric rhythm keypad
   const [isNumberModalOpen, setIsNumberModalOpen] = useState(false);
+  const liveScrollRef = useRef<HTMLDivElement>(null);
+  const pedalInputRef = useRef<HTMLInputElement>(null);
+  const pedal1PointerIdRef = useRef<number | null>(null);
+  const pedal2PointerIdRef = useRef<number | null>(null);
+  const previousScrollTopRef = useRef(0);
+  const scrollHomeRef = useRef(0);
+  const lastScrollPedalTimeRef = useRef(0);
+  const isTouchScrollingRef = useRef(false);
+
+  const ensurePedalInputFocus = (event?: PointerEvent) => {
+    const target = event?.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest('input, select, textarea, [contenteditable="true"]')
+    ) {
+      return;
+    }
+    pedalInputRef.current?.focus({ preventScroll: true });
+  };
+
+  React.useEffect(() => {
+    ensurePedalInputFocus();
+    const handleWindowFocus = () => ensurePedalInputFocus();
+    window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('pointerdown', ensurePedalInputFocus);
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('pointerdown', ensurePedalInputFocus);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const scrollContainer = liveScrollRef.current;
+    if (!scrollContainer) return;
+
+    scrollContainer.dataset.pedalScrollReady = 'false';
+    const initialScrollTop = 0;
+    scrollHomeRef.current = initialScrollTop;
+    scrollContainer.scrollTop = initialScrollTop;
+    previousScrollTopRef.current = initialScrollTop;
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollContainer.dataset.pedalScrollReady = 'true';
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  const handleMobileLiveScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const container = event.currentTarget;
+    const currentScrollTop = container.scrollTop;
+    if (container.dataset.pedalScrollReady !== 'true') {
+      previousScrollTopRef.current = currentScrollTop;
+      return;
+    }
+
+    const delta = currentScrollTop - previousScrollTopRef.current;
+    previousScrollTopRef.current = currentScrollTop;
+    if (
+      !isPedalEnabled ||
+      isTouchScrollingRef.current ||
+      Math.abs(delta) <= 70 ||
+      Date.now() - lastScrollPedalTimeRef.current <= 800
+    ) {
+      return;
+    }
+
+    lastScrollPedalTimeRef.current = Date.now();
+    if (delta > 0) {
+      onPedal1Down(false);
+      window.setTimeout(onPedal1Up, 150);
+    } else {
+      onPedal2Down();
+      window.setTimeout(onPedal2Up, 150);
+    }
+
+    const resetTop = scrollHomeRef.current;
+    container.scrollTop = resetTop;
+    previousScrollTopRef.current = resetTop;
+  };
 
   // Category selection state
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
@@ -255,7 +334,35 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
   };
 
   return (
-    <div className="h-[100dvh] max-h-[100dvh] w-screen overflow-hidden flex flex-col justify-between bg-[#070b14] text-slate-100 p-2 sm:p-3 select-none font-sans">
+    <div
+      ref={liveScrollRef}
+      onScroll={handleMobileLiveScroll}
+      onTouchStart={() => {
+        isTouchScrollingRef.current = true;
+      }}
+      onTouchEnd={() => {
+        window.setTimeout(() => {
+          isTouchScrollingRef.current = false;
+        }, 200);
+      }}
+      className="mobile-live-scroll relative h-[100dvh] max-h-[100dvh] w-screen overflow-x-hidden overflow-y-auto flex flex-col bg-[#070b14]"
+    >
+      <input
+        ref={pedalInputRef}
+        type="text"
+        inputMode="none"
+        data-pedal-input="true"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        value=""
+        onChange={() => {}}
+        aria-hidden="true"
+        className="absolute top-0 left-0 w-px h-px opacity-0 z-0 pointer-events-none pedal-input-receiver"
+      />
+      <div className="sticky top-0 z-10 h-[100dvh] min-h-[100dvh] shrink-0 overflow-hidden flex flex-col justify-between bg-[#070b14] p-2 font-sans text-slate-100 sm:p-3 select-none">
+
       {/* 1. TOP HEADER: BRAND, PEDAL STATUS & QUICK ACTIONS (COMPACT, NO OVERFLOW) */}
       <div className="flex items-center justify-between gap-2 px-2.5 py-1 mb-1.5 bg-[#0d1424] rounded-xl border border-slate-800/80 shadow-md shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -616,31 +723,37 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
         </span>
       </div>
 
-      {/* 6. THE 2 GIANT PEDAL CARDS (AUTO-EXPAND VIA flex-1 min-h-0, ZERO SCROLLING) */}
-      <div className="flex-1 min-h-0 grid grid-cols-2 gap-2 sm:gap-3">
+      {/* 6. Medium-height pedal cards that adapt to the mobile viewport */}
+      <div className="flex-none grid grid-cols-2 grid-rows-[auto_clamp(160px,30dvh,280px)] items-stretch gap-2 sm:gap-3">
         {/* PEDAL 1 (ESQUERDO) */}
-        <div className="flex flex-col h-full min-h-0">
+        <div className="flex min-w-0 flex-col">
           <div className="text-[10px] sm:text-xs font-black text-slate-300 uppercase mb-0.5 text-center tracking-wider shrink-0">
             PEDAL 1 (ESQUERDO)
           </div>
           <button
             type="button"
-            onMouseDown={() => onPedal1Down(false)}
-            onMouseUp={onPedal1Up}
-            onMouseLeave={() => {
-              if (isPedal1Pressed) onPedal1Up();
-            }}
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
+              if (pedal1PointerIdRef.current !== null) return;
               e.preventDefault();
+              pedal1PointerIdRef.current = e.pointerId;
+              e.currentTarget.setPointerCapture(e.pointerId);
               onPedal1Down(false);
             }}
-            onTouchEnd={(e) => {
+            onPointerUp={(e) => {
+              if (pedal1PointerIdRef.current !== e.pointerId) return;
               e.preventDefault();
+              pedal1PointerIdRef.current = null;
               onPedal1Up();
             }}
-            className={`flex-1 w-full min-h-0 rounded-2xl border-4 transition-all duration-100 flex flex-col items-center justify-center p-2 sm:p-3 cursor-pointer select-none active:scale-[0.98] ${
+            onPointerCancel={(e) => {
+              if (pedal1PointerIdRef.current !== e.pointerId) return;
+              e.preventDefault();
+              pedal1PointerIdRef.current = null;
+              onPedal1Up();
+            }}
+            className={`h-full min-h-0 w-full touch-none overflow-hidden rounded-2xl border-4 transition-all duration-100 flex flex-col items-center justify-center p-2 sm:p-3 cursor-pointer select-none ${
               isPedal1Pressed
-                ? 'scale-[0.97] bg-emerald-950/80 border-emerald-300 shadow-[0_0_30px_rgba(52,211,153,0.6)]'
+                ? 'bg-emerald-950/80 border-emerald-300 shadow-[0_0_30px_rgba(52,211,153,0.6)]'
                 : isPlaying
                 ? isOutro
                   ? 'bg-red-950/40 border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.4)]'
@@ -682,7 +795,7 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
             </div>
 
             {/* Action Title */}
-            <span className="text-xs sm:text-base font-black text-white tracking-wide uppercase text-center leading-tight">
+            <span className="line-clamp-2 min-h-[2.5em] text-[11px] sm:text-sm font-black text-white tracking-wide uppercase text-center leading-tight">
               {!isPlaying
                 ? 'TAP: TOCAR INTRO'
                 : isOutro
@@ -711,28 +824,34 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
         </div>
 
         {/* PEDAL 2 (DIREITO) */}
-        <div className="flex flex-col h-full min-h-0">
+        <div className="flex min-w-0 flex-col">
           <div className="text-[10px] sm:text-xs font-black text-slate-300 uppercase mb-0.5 text-center tracking-wider shrink-0">
             PEDAL 2 (DIREITO)
           </div>
           <button
             type="button"
-            onMouseDown={onPedal2Down}
-            onMouseUp={onPedal2Up}
-            onMouseLeave={() => {
-              if (isPedal2Pressed) onPedal2Up();
-            }}
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
+              if (pedal2PointerIdRef.current !== null) return;
               e.preventDefault();
+              pedal2PointerIdRef.current = e.pointerId;
+              e.currentTarget.setPointerCapture(e.pointerId);
               onPedal2Down();
             }}
-            onTouchEnd={(e) => {
+            onPointerUp={(e) => {
+              if (pedal2PointerIdRef.current !== e.pointerId) return;
               e.preventDefault();
+              pedal2PointerIdRef.current = null;
               onPedal2Up();
             }}
-            className={`flex-1 w-full min-h-0 rounded-2xl border-4 transition-all duration-100 flex flex-col items-center justify-center p-2 sm:p-3 cursor-pointer select-none active:scale-[0.98] ${
+            onPointerCancel={(e) => {
+              if (pedal2PointerIdRef.current !== e.pointerId) return;
+              e.preventDefault();
+              pedal2PointerIdRef.current = null;
+              onPedal2Up();
+            }}
+            className={`h-full min-h-0 w-full touch-none overflow-hidden rounded-2xl border-4 transition-all duration-100 flex flex-col items-center justify-center p-2 sm:p-3 cursor-pointer select-none ${
               isPedal2Pressed
-                ? 'scale-[0.97] bg-blue-950/80 border-blue-300 shadow-[0_0_30px_rgba(59,130,246,0.6)]'
+                ? 'bg-blue-950/80 border-blue-300 shadow-[0_0_30px_rgba(59,130,246,0.6)]'
                 : isPlaying
                 ? isTransition
                   ? 'bg-purple-950/50 border-purple-400 shadow-[0_0_20px_rgba(168,85,247,0.4)]'
@@ -750,7 +869,7 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
             </div>
 
             {/* Action Title */}
-            <span className="text-xs sm:text-base font-black text-white tracking-wide uppercase text-center leading-tight">
+            <span className="line-clamp-2 min-h-[2.5em] text-[11px] sm:text-sm font-black text-white tracking-wide uppercase text-center leading-tight">
               {!isPlaying
                 ? `TAP: MUDAR P/ ${
                     selectedStartPart === 'verse'
@@ -792,6 +911,7 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
           </button>
         </div>
       </div>
+      </div>
 
       {/* 7. NUMERIC KEYPAD MODAL (NÚMERO RITMO) */}
       <RhythmNumberModal
@@ -801,6 +921,7 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
         currentRhythmId={project.id}
         onSelectRhythm={onSelectProject}
       />
+      <div aria-hidden="true" className="h-24 shrink-0 pointer-events-none" />
     </div>
   );
 };

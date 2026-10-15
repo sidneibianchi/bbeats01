@@ -235,11 +235,20 @@ export const AddInstrumentModal: React.FC<AddInstrumentModalProps> = ({
     setSamplesList(audioEngine.getCustomSamplesList());
   };
 
-  const handleDeleteCustomSample = (sampleId: string, sampleName: string) => {
+  const handleDeleteCustomSample = async (sampleId: string, sampleName: string) => {
     if (window.confirm(`Deseja realmente excluir o sample "${sampleName}"?`)) {
-      audioEngine.deleteCustomSample(sampleId);
-      onDeleteSample?.(sampleId);
-      refreshSamples();
+      try {
+        await audioEngine.deleteCustomSample(sampleId, sampleName);
+        onDeleteSample?.(sampleId);
+        refreshSamples();
+      } catch (error) {
+        console.error('Failed to delete sample:', error);
+        window.alert(
+          error instanceof Error
+            ? `Não foi possível excluir o sample: ${error.message}`
+            : 'Não foi possível excluir o sample.'
+        );
+      }
     }
   };
 

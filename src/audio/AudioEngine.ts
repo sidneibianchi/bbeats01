@@ -14,6 +14,7 @@ import {
   getDeletedSamplesList,
   addDeletedSample,
 } from './sampleStorage';
+import { deleteSampleFromDatabase } from '../lib/uploadSample';
 import { BUILT_IN_SAMPLES } from '../presets/defaultSamples';
 
 export interface SchedulerCallback {
@@ -279,7 +280,7 @@ export class AudioEngine {
   public async preloadAllServerSamples(): Promise<void> {
     try {
       this.init();
-      let samples: Array<{ id: string; name: string; fileName?: string }> = [];
+      let samples: Array<{ id: string; name: string; fileName?: string; fileUrl?: string }> = [];
 
       // 1. Try server API if available and returning JSON
       try {
@@ -291,6 +292,35 @@ export class AudioEngine {
           }
         }
       } catch {}
+
+      // UploadThing-backed samples are stored in Neon and need their durable URL.
+      try {
+        const resp = await fetch('/api/samples/db');
+        if (resp.ok && !isHtmlResponse(resp)) {
+          const data = await resp.json() as {
+            samples?: Array<{
+              id: string;
+              localSampleId?: string | null;
+              title?: string | null;
+              filename: string;
+              fileUrl: string;
+            }>;
+          };
+          const byId = new Map(samples.map((sample) => [sample.id, sample]));
+          for (const sample of data.samples || []) {
+            const id = sample.localSampleId || sample.id;
+            byId.set(id, {
+              id,
+              name: sample.title || sample.filename,
+              fileName: sample.filename,
+              fileUrl: sample.fileUrl,
+            });
+          }
+          samples = [...byId.values()];
+        }
+      } catch (error) {
+        console.warn('Could not load UploadThing sample catalog for playback:', error);
+      }
 
       // 2. Fallback to static public/samples/index.json (Vercel / static hosting)
       if (samples.length === 0) {
@@ -313,7 +343,7 @@ export class AudioEngine {
         (s) =>
           !deletedSet.has(s.id.toLowerCase()) &&
           !deletedSet.has(s.name.toLowerCase()) &&
-          !deletedSet.has(((s as any).fileName || '').toLowerCase())
+          !deletedSet.has((s.fileName || '').toLowerCase())
       );
 
       // Only inject default built-in catalog on first virgin install
@@ -344,8 +374,9 @@ export class AudioEngine {
         if (!this.customSamples.has(s.id)) {
           try {
             let audioBuffer: AudioBuffer | null = null;
-            // Always try static files first (super fast and 100% reliable on Vercel)
+            // Prefer durable UploadThing files, then try legacy static/server paths.
             const candidates = [
+              s.fileUrl || null,
               s.fileName ? `/samples/${encodeURIComponent(s.fileName)}` : null,
               `/samples/${encodeURIComponent(s.id)}.wav`,
               `/samples/${encodeURIComponent(s.name)}`,
@@ -524,9 +555,10 @@ export class AudioEngine {
     return id;
   }
 
-  public async deleteCustomSample(id: string): Promise<boolean> {
+  public async deleteCustomSample(id: string, sampleName?: string): Promise<boolean> {
     const rec = this.customSamples.get(id);
-    const targetName = rec?.name;
+    const targetName = rec?.name ?? sampleName;
+    await deleteSampleFromDatabase(id, targetName);
     let deleted = this.customSamples.delete(id);
     for (const [key, val] of this.customSamples.entries()) {
       if (

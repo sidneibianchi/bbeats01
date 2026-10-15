@@ -17,6 +17,7 @@ export interface StoredSampleRecord {
   blob: Blob;
   mimeType: string;
   createdAt: number;
+  remoteUpdatedAt?: string;
   folder?: string;
   subFolder?: string;
 }
@@ -281,6 +282,8 @@ export interface RemoteSampleMeta {
   fileName: string;
   size: number;
   createdAt: number;
+  fileUrl?: string;
+  updatedAt?: string;
   folder?: string;
   subFolder?: string;
 }
@@ -302,6 +305,40 @@ export async function syncSamplesFromServer(): Promise<number> {
         }
       }
     } catch {}
+
+    // UploadThing-backed samples are listed separately from legacy local files.
+    try {
+      const resp = await fetch('/api/samples/db');
+      if (resp.ok && !isHtmlResponse(resp)) {
+        const json = await resp.json() as {
+          samples?: Array<{
+            id: string;
+            localSampleId?: string | null;
+            title?: string | null;
+            filename: string;
+            fileUrl: string;
+            mimeType?: string | null;
+            createdAt: string;
+            updatedAt: string;
+          }>;
+        };
+        const cloudSamples = (json.samples || []).map((sample) => ({
+          id: sample.localSampleId || sample.id,
+          name: sample.title || sample.filename,
+          fileName: sample.filename,
+          mimeType: sample.mimeType || 'audio/wav',
+          size: 0,
+          createdAt: Date.parse(sample.createdAt) || Date.now(),
+          fileUrl: sample.fileUrl,
+          updatedAt: sample.updatedAt,
+        }));
+        const byId = new Map(serverSamples.map((sample) => [sample.id, sample]));
+        for (const sample of cloudSamples) byId.set(sample.id, sample);
+        serverSamples = [...byId.values()];
+      }
+    } catch (error) {
+      console.warn('Could not load UploadThing sample catalog:', error);
+    }
 
     // 2. Fallback to static public/samples/index.json (Vercel / static host)
     if (serverSamples.length === 0) {
@@ -357,15 +394,19 @@ export async function syncSamplesFromServer(): Promise<number> {
       }
     }
 
-    const localIds = new Set(localSamples.map((s) => s.id));
+    const localById = new Map(localSamples.map((sample) => [sample.id, sample]));
     let downloadedCount = 0;
 
     for (const remote of serverSamples) {
-      if (!localIds.has(remote.id)) {
+      const local = localById.get(remote.id);
+      const needsDownload = !local ||
+        (remote.updatedAt !== undefined && local.remoteUpdatedAt !== remote.updatedAt);
+      if (needsDownload) {
         try {
           let audioBlob: Blob | null = null;
-          // Priority 1: Direct static asset file (reliable on Vercel and local dev)
+          // Prefer the durable UploadThing URL, then try legacy static/server paths.
           const candidateUrls = [
+            remote.fileUrl || null,
             remote.fileName ? `/samples/${encodeURIComponent(remote.fileName)}` : null,
             `/samples/${encodeURIComponent(remote.id)}.wav`,
             remote.name ? `/samples/${encodeURIComponent(remote.name)}` : null,
@@ -394,6 +435,7 @@ export async function syncSamplesFromServer(): Promise<number> {
                 blob: audioBlob!,
                 mimeType: remote.mimeType || 'audio/wav',
                 createdAt: remote.createdAt || Date.now(),
+                remoteUpdatedAt: remote.updatedAt,
               };
               const req = store.put(record);
               req.onsuccess = () => res();
@@ -439,8 +481,13 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
       if (Array.isArray(data.rhythms)) {
         return data.rhythms;
       }
+      console.warn('Rhythm API returned an invalid response shape.');
+    } else if (!isHtmlResponse(resp) && resp.status !== 404) {
+      console.warn(`Rhythm API request failed (${resp.status}); trying static backup.`);
     }
-  } catch {}
+  } catch (error) {
+    console.warn('Rhythm API is unavailable; trying static backup:', error);
+  }
 
   // Fallback to static public/rhythms.json (works on Vercel)
   try {
@@ -452,7 +499,7 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
       }
     }
   } catch (err) {
-    console.warn('Failed to load rhythms from static fallback:', err);
+    console.warn('Failed to load rhythms from static backup:', err);
   }
   return null;
 }
@@ -462,7 +509,11 @@ export async function deleteRhythmFromServer(rhythmId: string): Promise<boolean>
     const resp = await fetch(`/api/rhythms/${encodeURIComponent(rhythmId)}`, {
       method: 'DELETE',
     });
-    return resp.ok && !isHtmlResponse(resp);
+    if (!resp.ok || isHtmlResponse(resp)) {
+      console.warn(`Failed to delete rhythm from shared library (${resp.status}).`);
+      return false;
+    }
+    return true;
   } catch (err) {
     console.warn('Failed to delete rhythm from server:', err);
     return false;
@@ -473,10 +524,16 @@ export async function saveRhythmsToServer(rhythms: unknown[]): Promise<boolean> 
   try {
     const resp = await fetch('/api/rhythms', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ rhythms }),
     });
-    return resp.ok && !isHtmlResponse(resp);
+    if (!resp.ok || isHtmlResponse(resp)) {
+      console.warn(`Failed to save shared rhythms (${resp.status}).`);
+      return false;
+    }
+    return true;
   } catch (err) {
     console.warn('Failed to save rhythms to server:', err);
     return false;
