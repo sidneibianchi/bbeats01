@@ -5,6 +5,7 @@ import { UTApi, UTFile } from 'uploadthing/server';
 const prisma = new PrismaClient();
 const MAX_SAMPLE_BYTES = 32 * 1024 * 1024;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+let prismaShutdownHandlersInstalled = false;
 
 type SampleUploadBody = {
   title?: unknown;
@@ -15,7 +16,45 @@ type SampleUploadBody = {
   localSampleId?: unknown;
 };
 
+function installPrismaShutdownHandlers() {
+  if (prismaShutdownHandlersInstalled) return;
+  prismaShutdownHandlersInstalled = true;
+
+  process.on('SIGINT', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (SIGINT)');
+      process.exit(0);
+    } catch (error) {
+      console.error('Failed to disconnect Prisma (SIGINT):', error);
+      process.exit(1);
+    }
+  });
+
+  process.on('SIGTERM', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (SIGTERM)');
+      process.exit(0);
+    } catch (error) {
+      console.error('Failed to disconnect Prisma (SIGTERM):', error);
+      process.exit(1);
+    }
+  });
+
+  process.on('beforeExit', async () => {
+    try {
+      await prisma.$disconnect();
+      console.log('Prisma disconnected (beforeExit)');
+    } catch (error) {
+      console.error('Failed to disconnect Prisma (beforeExit):', error);
+    }
+  });
+}
+
 export function registerSampleDbRoutes(app: Express) {
+  installPrismaShutdownHandlers();
+
   app.get('/api/samples/db', async (_req: Request, res: Response) => {
     try {
       const samples = await prisma.sample.findMany({
@@ -28,7 +67,6 @@ export function registerSampleDbRoutes(app: Express) {
       res.status(500).json({ success: false, error: 'Failed to list samples' });
     }
   });
-
   app.post('/api/samples/db', async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as SampleUploadBody;
     const filename =
