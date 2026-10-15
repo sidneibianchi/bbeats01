@@ -111,7 +111,32 @@ export async function getAllStoredSamples(): Promise<StoredSampleRecord[]> {
   }
 }
 
-export async function deleteSampleFromStorage(id: string): Promise<void> {
+export function getDeletedSamplesList(): string[] {
+  try {
+    const raw = localStorage.getItem('beatbuddy_deleted_samples');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+export function addDeletedSample(idOrName: string) {
+  if (!idOrName) return;
+  try {
+    const list = getDeletedSamplesList();
+    if (!list.includes(idOrName)) {
+      list.push(idOrName);
+      localStorage.setItem('beatbuddy_deleted_samples', JSON.stringify(list));
+    }
+  } catch {}
+}
+
+export async function deleteSampleFromStorage(id: string, name?: string): Promise<void> {
+  addDeletedSample(id);
+  if (name) addDeletedSample(name);
+
   try {
     const db = await openDatabase();
     await new Promise<void>((resolve, reject) => {
@@ -135,6 +160,9 @@ export async function deleteSampleFromStorage(id: string): Promise<void> {
     // Also delete from server (which deletes from disk and removes from samples_index.json & public/samples/index.json)
     try {
       await fetch(`/api/samples/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (name && name !== id) {
+        await fetch(`/api/samples/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      }
     } catch (e) {
       console.warn('Failed to delete sample on server:', e);
     }
@@ -289,10 +317,21 @@ export async function syncSamplesFromServer(): Promise<number> {
       } catch {}
     }
 
-    // 3. Guarantee all built-in catalog samples are in the list
-    const existingIds = new Set(serverSamples.map((s) => s.id));
-    for (const b of BUILT_IN_SAMPLES) {
-      if (!existingIds.has(b.id)) {
+    // 3. Filter out any samples that were explicitly deleted by the user
+    const deletedList = getDeletedSamplesList();
+    const deletedSet = new Set(deletedList.map((d) => d.toLowerCase()));
+
+    // Filter server samples against deleted set
+    serverSamples = serverSamples.filter(
+      (s) =>
+        !deletedSet.has(s.id.toLowerCase()) &&
+        !deletedSet.has(s.name.toLowerCase()) &&
+        !deletedSet.has((s.fileName || '').toLowerCase())
+    );
+
+    // Only inject built-in catalog if there are NO server samples AND no deleted samples (fresh install)
+    if (serverSamples.length === 0 && deletedSet.size === 0) {
+      for (const b of BUILT_IN_SAMPLES) {
         serverSamples.push({
           id: b.id,
           name: b.name,
@@ -307,6 +346,17 @@ export async function syncSamplesFromServer(): Promise<number> {
     if (serverSamples.length === 0) return 0;
 
     const localSamples = await getAllStoredSamples();
+
+    // Purge any local samples that have been marked as deleted
+    for (const local of localSamples) {
+      if (
+        deletedSet.has(local.id.toLowerCase()) ||
+        deletedSet.has(local.name.toLowerCase())
+      ) {
+        deleteSampleFromStorage(local.id).catch(() => {});
+      }
+    }
+
     const localIds = new Set(localSamples.map((s) => s.id));
     let downloadedCount = 0;
 
@@ -357,13 +407,17 @@ export async function syncSamplesFromServer(): Promise<number> {
       }
     }
 
-    // Attempt to sync local custom samples to server API only if server API is live
+    // Sync local custom samples to server API only if not in deletedSet and server API is live
     try {
       const isVercel = window.location.hostname.includes('vercel.app');
       if (!isVercel) {
         const remoteIds = new Set(serverSamples.map((s) => s.id));
         for (const local of localSamples) {
-          if (!remoteIds.has(local.id)) {
+          if (
+            !remoteIds.has(local.id) &&
+            !deletedSet.has(local.id.toLowerCase()) &&
+            !deletedSet.has(local.name.toLowerCase())
+          ) {
             syncSampleToServer(local.id, local.name, local.blob).catch(() => {});
           }
         }
@@ -382,7 +436,7 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
     const resp = await fetch('/api/rhythms');
     if (resp.ok && !isHtmlResponse(resp)) {
       const data = await resp.json();
-      if (Array.isArray(data.rhythms) && data.rhythms.length > 0) {
+      if (Array.isArray(data.rhythms)) {
         return data.rhythms;
       }
     }
@@ -393,7 +447,7 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
     const staticResp = await fetch('/rhythms.json');
     if (staticResp.ok && !isHtmlResponse(staticResp)) {
       const list = await staticResp.json();
-      if (Array.isArray(list) && list.length > 0) {
+      if (Array.isArray(list)) {
         return list;
       }
     }
@@ -401,6 +455,18 @@ export async function fetchRhythmsFromServer(): Promise<unknown[] | null> {
     console.warn('Failed to load rhythms from static fallback:', err);
   }
   return null;
+}
+
+export async function deleteRhythmFromServer(rhythmId: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/rhythms/${encodeURIComponent(rhythmId)}`, {
+      method: 'DELETE',
+    });
+    return resp.ok && !isHtmlResponse(resp);
+  } catch (err) {
+    console.warn('Failed to delete rhythm from server:', err);
+    return false;
+  }
 }
 
 export async function saveRhythmsToServer(rhythms: unknown[]): Promise<boolean> {

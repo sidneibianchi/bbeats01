@@ -49,7 +49,7 @@ function loadRhythms(): unknown[] {
     if (fs.existsSync(RHYTHMS_FILE)) {
       const data = fs.readFileSync(RHYTHMS_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (err) {
     console.error('Error loading rhythms.json:', err);
@@ -58,7 +58,7 @@ function loadRhythms(): unknown[] {
     if (fs.existsSync(PUBLIC_RHYTHMS_FILE)) {
       const data = fs.readFileSync(PUBLIC_RHYTHMS_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (err) {
     console.error('Error loading public/rhythms.json:', err);
@@ -84,7 +84,7 @@ function loadSamplesMeta(): StoredSampleMeta[] {
     if (fs.existsSync(SAMPLES_INDEX_FILE)) {
       const data = fs.readFileSync(SAMPLES_INDEX_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (err) {
     console.error('Error loading samples_index.json:', err);
@@ -93,7 +93,7 @@ function loadSamplesMeta(): StoredSampleMeta[] {
     if (fs.existsSync(PUBLIC_SAMPLES_INDEX_FILE)) {
       const data = fs.readFileSync(PUBLIC_SAMPLES_INDEX_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch (err) {
     console.error('Error loading public samples index:', err);
@@ -134,7 +134,32 @@ app.post('/api/rhythms', (req: Request, res: Response) => {
   res.json({ success: true, count: rhythms.length });
 });
 
-// 2.1 Get & Set active rhythm
+// 2.1 Delete a specific rhythm by ID
+app.delete('/api/rhythms/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const list = loadRhythms() as Array<{ id: string }>;
+  const filtered = list.filter((r) => r.id !== id);
+  saveRhythms(filtered);
+
+  // Update active rhythm if it was pointing to the deleted rhythm
+  try {
+    if (fs.existsSync(ACTIVE_RHYTHM_FILE)) {
+      const activeData = JSON.parse(fs.readFileSync(ACTIVE_RHYTHM_FILE, 'utf-8'));
+      if (activeData.rhythmId === id) {
+        const nextId = filtered[0]?.id || null;
+        const str = JSON.stringify({ rhythmId: nextId });
+        fs.writeFileSync(ACTIVE_RHYTHM_FILE, str, 'utf-8');
+        fs.writeFileSync(PUBLIC_ACTIVE_RHYTHM_FILE, str, 'utf-8');
+      }
+    }
+  } catch (err) {
+    console.error('Failed to update active rhythm after deletion:', err);
+  }
+
+  res.json({ success: true, count: filtered.length });
+});
+
+// 2.2 Get & Set active rhythm
 const ACTIVE_RHYTHM_FILE = path.resolve(DATA_DIR, 'active_rhythm.json');
 app.get('/api/active_rhythm', (_req: Request, res: Response) => {
   try {
@@ -270,6 +295,15 @@ app.post('/api/samples', (req: Request, res: Response) => {
     }
     saveSamplesMeta(samples);
 
+    // Unmark from deleted_samples if re-uploaded
+    try {
+      const deletedList = getDeletedSamples();
+      const updated = deletedList.filter((d) => d !== id && d !== name && d !== fileName);
+      if (updated.length !== deletedList.length) {
+        fs.writeFileSync(DELETED_SAMPLES_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+      }
+    } catch {}
+
     res.json({ success: true, sample: meta });
   } catch (err) {
     console.error('Error saving sample:', err);
@@ -293,37 +327,102 @@ app.put('/api/samples/:id/folder', (req: Request, res: Response) => {
   }
 });
 
+// Helper to recursively remove matching files from directory
+function removeSampleFilesRecursive(dir: string, targets: string[]) {
+  if (!fs.existsSync(dir)) return;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      removeSampleFilesRecursive(fullPath, targets);
+    } else {
+      const name = entry.name.toLowerCase();
+      const shouldDelete = targets.some((t) => {
+        if (!t) return false;
+        const targetClean = t.toLowerCase();
+        return (
+          name === targetClean ||
+          name.startsWith(`${targetClean}.`) ||
+          name.includes(targetClean) ||
+          targetClean.includes(name)
+        );
+      });
+      if (shouldDelete) {
+        try {
+          fs.unlinkSync(fullPath);
+          console.log(`[DELETE] Successfully removed sample file: ${fullPath}`);
+        } catch (err) {
+          console.error(`Failed to delete file ${fullPath}:`, err);
+        }
+      }
+    }
+  }
+}
+
+const DELETED_SAMPLES_FILE = path.resolve(DATA_DIR, 'deleted_samples.json');
+
+function getDeletedSamples(): string[] {
+  try {
+    if (fs.existsSync(DELETED_SAMPLES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DELETED_SAMPLES_FILE, 'utf-8'));
+      if (Array.isArray(data)) return data;
+    }
+  } catch {}
+  return [];
+}
+
+function recordDeletedSample(ids: string[]) {
+  try {
+    const list = getDeletedSamples();
+    for (const item of ids) {
+      if (item && !list.includes(item)) {
+        list.push(item);
+      }
+    }
+    fs.writeFileSync(DELETED_SAMPLES_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to update deleted_samples.json:', err);
+  }
+}
+
 // 6. Delete a sample
 app.delete('/api/samples/:id', (req: Request, res: Response) => {
   const { id } = req.params;
   const samples = loadSamplesMeta();
   const sample = samples.find((s) => s.id === id || s.name === id || s.fileName === id);
   const targetId = sample ? sample.id : id;
+  const targetName = sample ? sample.name : id;
+  const targetFileName = sample ? sample.fileName : '';
 
-  const filesToRemove = [
-    sample?.fileName,
-    sample?.name,
+  const targets = [
+    targetId,
+    targetName,
+    targetFileName,
     `${targetId}.wav`,
     `${targetId}.webm`,
     `${id}.wav`,
     id,
   ].filter(Boolean) as string[];
 
-  for (const f of filesToRemove) {
-    const p1 = path.resolve(SAMPLES_DIR, f);
-    if (fs.existsSync(p1)) {
-      try { fs.unlinkSync(p1); } catch {}
-    }
-    const p2 = path.resolve(PUBLIC_DIR, 'samples', f);
-    if (fs.existsSync(p2)) {
-      try { fs.unlinkSync(p2); } catch {}
-    }
-  }
+  // Physically remove from SAMPLES_DIR and PUBLIC_DIR/samples
+  removeSampleFilesRecursive(SAMPLES_DIR, targets);
+  removeSampleFilesRecursive(path.resolve(PUBLIC_DIR, 'samples'), targets);
 
-  const filtered = samples.filter((s) => s.id !== targetId && s.id !== id && s.name !== id);
+  // Filter and save JSON metadata
+  const filtered = samples.filter(
+    (s) => s.id !== targetId && s.id !== id && s.name !== id && s.name !== targetName
+  );
   saveSamplesMeta(filtered);
 
+  // Permanently record in deleted_samples so it is never re-seeded
+  recordDeletedSample([targetId, targetName, targetFileName]);
+
   res.json({ success: true, id: targetId });
+});
+
+// 6.1 Get list of permanently deleted samples
+app.get('/api/deleted_samples', (_req: Request, res: Response) => {
+  res.json({ success: true, deleted: getDeletedSamples() });
 });
 
 // 7. Rename a sample

@@ -16,7 +16,7 @@
         "name": "ganza.wav",
         "category": "custom",
         "soundType": "custom",
-        "color": "#f59e0b",
+        "color": "#ef4444",
         "volume": 1.2,
         "pan": 0,
         "tune": 0,
@@ -33,7 +33,7 @@
         "name": "pandeiro grave.wav",
         "category": "custom",
         "soundType": "custom",
-        "color": "#f59e0b",
+        "color": "#3b82f6",
         "volume": 0.85,
         "pan": 0,
         "tune": 0,
@@ -5202,7 +5202,7 @@
             },
             {
               "active": true,
-              "velocity": 90,
+              "velocity": 18,
               "probability": 1,
               "ratchet": 1
             },
@@ -5238,7 +5238,7 @@
             },
             {
               "active": true,
-              "velocity": 90,
+              "velocity": 127,
               "probability": 1,
               "ratchet": 1
             },
@@ -5262,7 +5262,7 @@
             },
             {
               "active": true,
-              "velocity": 90,
+              "velocity": 67,
               "probability": 1,
               "ratchet": 1
             },

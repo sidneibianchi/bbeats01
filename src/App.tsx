@@ -47,7 +47,9 @@ import {
   saveRhythmsToServer,
   fetchActiveRhythmFromServer,
   saveActiveRhythmToServer,
+  deleteRhythmFromServer,
 } from './audio/sampleStorage';
+import { isSampleUsedInRhythms } from './audio/sampleUsage';
 import { footswitchManager } from './audio/midiAndPedalManager';
 
 export default function App() {
@@ -66,6 +68,35 @@ export default function App() {
       resolution: p.resolution === '1/16' ? '1/32' : (p.resolution || '1/32'),
     };
   };
+
+  const isDeletingRhythmRef = useRef(false);
+
+  const createBlankRhythm = (): SongProject => ({
+    id: `rhythm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    name: 'Novo Ritmo',
+    genre: 'Personalizado',
+    bpm: 100,
+    timeSignature: '4/4',
+    resolution: '1/32',
+    barsCount: 1,
+    swing: 0,
+    humanize: 0,
+    accentSound: 'crash',
+    defaultStepCount: 32,
+    tracks: [],
+    parts: {
+      verse: { id: 'verse', name: 'Parte A', description: 'Parte A', trackSteps: {} },
+      part_b: { id: 'part_b', name: 'Parte B', description: 'Parte B', trackSteps: {} },
+      part_c: { id: 'part_c', name: 'Parte C', description: 'Parte C', trackSteps: {} },
+      fill1: { id: 'fill1', name: 'Virada A', description: 'Virada A', trackSteps: {} },
+      fill2: { id: 'fill2', name: 'Virada B', description: 'Virada B', trackSteps: {} },
+      fill3: { id: 'fill3', name: 'Virada C', description: 'Virada C', trackSteps: {} },
+      transition_a_b: { id: 'transition_a_b', name: 'Trans A->B', description: 'Transição A para B', trackSteps: {} },
+      transition_b_a: { id: 'transition_b_a', name: 'Trans B->A', description: 'Transição B para A', trackSteps: {} },
+      intro: { id: 'intro', name: 'Intro', description: 'Introdução', trackSteps: {} },
+      outro: { id: 'outro', name: 'Final', description: 'Finalização', trackSteps: {} },
+    },
+  });
 
   // Persistent Rhythms Library
   const [rhythms, setRhythms] = useState<SongProject[]>(() => {
@@ -323,6 +354,7 @@ export default function App() {
 
   // Sync project changes with audio engine & persistent storage + Cloud
   useEffect(() => {
+    if (isDeletingRhythmRef.current) return;
     audioEngine.updateProject(project);
 
     // Save project changes to rhythms library and localStorage
@@ -1257,21 +1289,51 @@ export default function App() {
     triggerPedalToast(`🥁 Kit "${kit.name}" aplicado ao ritmo atual!`);
   };
 
-  const handleDeleteRhythm = (rhythmId: string) => {
-    if (rhythms.length <= 1) return;
+  const handleDeleteRhythm = async (rhythmId: string) => {
+    isDeletingRhythmRef.current = true;
     audioEngine.stop();
+
+    const targetRhythm = rhythms.find((r) => r.id === rhythmId);
+    const rhythmName = targetRhythm?.name || 'Ritmo';
+
     const nextList = rhythms.filter((r) => r.id !== rhythmId);
-    setRhythms(nextList);
-    try {
-      localStorage.setItem('beatbuddy_rhythms', JSON.stringify(nextList));
-      saveRhythmsToServer(nextList).catch(() => {});
-    } catch (e) {
-      console.error(e);
+
+    // If the list is now empty (the deleted rhythm was the only one), generate a fresh empty project
+    let nextActive: SongProject;
+    let finalList: SongProject[];
+
+    if (nextList.length === 0) {
+      const blank = createBlankRhythm();
+      nextActive = blank;
+      finalList = [blank];
+    } else {
+      nextActive = (project.id === rhythmId)
+        ? nextList[0]
+        : (nextList.find((r) => r.id === project.id) || nextList[0]);
+      finalList = nextList;
     }
-    const nextActive = nextList[0] || sambaPreset;
+
+    setRhythms(finalList);
     setProject(nextActive);
     setActivePartId('verse');
     setPlayingPartId('verse');
+    setBasePartId('verse');
+    audioEngine.updateProject(nextActive);
+
+    try {
+      localStorage.setItem('beatbuddy_rhythms', JSON.stringify(finalList));
+      localStorage.setItem('beatbuddy_active_rhythm_id', nextActive.id);
+      await deleteRhythmFromServer(rhythmId);
+      await saveRhythmsToServer(finalList);
+      await saveActiveRhythmToServer(nextActive.id);
+      triggerPedalToast(`🗑️ Ritmo "${rhythmName}" excluído com sucesso do arquivo JSON!`);
+    } catch (e) {
+      console.error('Failed to delete rhythm:', e);
+    } finally {
+      setTimeout(() => {
+        isDeletingRhythmRef.current = false;
+      }, 500);
+    }
   };
 
   // --- Step & Sequencer Manipulation ---
@@ -1446,6 +1508,16 @@ export default function App() {
   };
 
   const handleDeleteSample = (sampleId: string) => {
+    const sampleRecord = customSamplesList.find((s) => s.id === sampleId);
+    const sampleName = sampleRecord?.name || sampleId;
+    const usage = isSampleUsedInRhythms(sampleId, sampleName, rhythms);
+    if (usage.used) {
+      triggerPedalToast(
+        `⚠️ Bloqueado: "${sampleName}" está em uso no(s) ritmo(s): "${usage.rhythmNames.join(', ')}". Remova-o antes de excluir.`
+      );
+      return;
+    }
+
     audioEngine.deleteCustomSample(sampleId);
     setProject((prev) => ({
       ...prev,
@@ -1460,6 +1532,7 @@ export default function App() {
           : t
       ),
     }));
+    triggerPedalToast(`🗑️ Sample "${sampleName}" excluído com sucesso do disco e do JSON!`);
   };
 
   const handleRenameSample = (sampleId: string, newName: string) => {
@@ -1745,7 +1818,7 @@ export default function App() {
           masterVolume={masterVolume}
           metronomeOn={metronomeOn}
           playIntroOnStart={playIntroOnStart}
-          canDeleteRhythm={rhythms.length > 1}
+          canDeleteRhythm={true}
           isSavedRecently={isSavedRecently}
           onOpenDrumKitModal={() => setIsDrumKitModalOpen(true)}
           onSaveProjectToApp={handleSaveProjectToApp}
@@ -2049,6 +2122,7 @@ export default function App() {
             onDeleteSample={handleDeleteSample}
             onRenameSample={handleRenameSample}
             customSamplesList={customSamplesList}
+            rhythms={rhythms}
           />
         )}
       </main>
@@ -2061,6 +2135,7 @@ export default function App() {
           track={editingTrack}
           onClose={() => setEditingTrack(null)}
           onUpdateTrackParams={handleUpdateTrackParams}
+          rhythms={rhythms}
         />
       )}
 
@@ -2087,7 +2162,6 @@ export default function App() {
       {isDeleteRhythmOpen && (
         <DeleteRhythmModal
           rhythm={project}
-          canDelete={rhythms.length > 1}
           onClose={() => setIsDeleteRhythmOpen(false)}
           onConfirmDelete={handleDeleteRhythm}
         />

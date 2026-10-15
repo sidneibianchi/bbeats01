@@ -27,6 +27,8 @@ import {
   MoveRight,
   Tag,
   CheckCircle2,
+  Lock,
+  AlertCircle,
 } from 'lucide-react';
 import { audioEngine } from '../audio/AudioEngine';
 import {
@@ -36,12 +38,15 @@ import {
   deleteSampleFromStorage,
   updateSampleFolderInStorage,
 } from '../audio/sampleStorage';
+import { SongProject } from '../types/rhythm';
+import { isSampleUsedInRhythms } from '../audio/sampleUsage';
 
 interface SamplesLibraryViewProps {
   onAddTrackWithSample: (sampleId: string, sampleName: string) => void;
   onDeleteSample?: (sampleId: string) => void;
   onRenameSample?: (sampleId: string, newName: string) => void;
   customSamplesList?: Array<{ id: string; name: string }>;
+  rhythms?: SongProject[];
 }
 
 interface SampleFolderMeta {
@@ -65,6 +70,7 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
   onDeleteSample,
   onRenameSample,
   customSamplesList,
+  rhythms = [],
 }) => {
   const [samplesList, setSamplesList] = useState<Array<{ id: string; name: string }>>(() =>
     customSamplesList || audioEngine.getCustomSamplesList()
@@ -328,12 +334,22 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
 
   // Delete sample: removes from physical directory AND from JSON file
   const executeDeleteSample = async (sampleId: string, sampleName: string) => {
+    // Condition: ONLY allow deleting if the sample is NOT being used in any rhythm!
+    const usage = isSampleUsedInRhythms(sampleId, sampleName, rhythms);
+    if (usage.used) {
+      setStatusMessage(
+        `⚠️ Bloqueado: o sample "${sampleName}" não pode ser excluído porque está sendo usado no(s) ritmo(s): "${usage.rhythmNames.join(', ')}". Remova-o de todos os ritmos antes de excluir.`
+      );
+      setConfirmDeleteId(null);
+      return;
+    }
+
     try {
-      // 1. Delete from AudioEngine cache
+      // 1. Delete from AudioEngine cache and internal buffers
       await audioEngine.deleteCustomSample(sampleId);
 
       // 2. Delete from persistent IndexedDB and triggers DELETE on /api/samples/:id (which deletes from disk and index.json)
-      await deleteSampleFromStorage(sampleId);
+      await deleteSampleFromStorage(sampleId, sampleName);
 
       // 3. Remove folder association
       const updatedFolders = { ...sampleFolders };
@@ -341,11 +357,14 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
       delete updatedFolders[sampleName];
       saveSampleFolders(updatedFolders);
 
-      // 4. Notify parent
+      // 4. Immediately remove from local state list
+      setSamplesList((prev) => prev.filter((s) => s.id !== sampleId && s.name !== sampleName));
+
+      // 5. Notify parent
       onDeleteSample?.(sampleId);
       refreshList();
       setConfirmDeleteId(null);
-      setStatusMessage(`🗑️ Sample "${sampleName}" removido com sucesso do arquivo JSON e da pasta de samples!`);
+      setStatusMessage(`🗑️ Sample "${sampleName}" removido com sucesso do arquivo JSON e da pasta física de samples!`);
     } catch {
       setStatusMessage(`Erro ao excluir sample "${sampleName}".`);
     }
@@ -932,8 +951,8 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
                         </div>
                       )}
 
-                      {/* Folder & Subfolder Tag */}
-                      <div className="flex items-center gap-1.5 mt-0.5">
+                      {/* Folder & Subfolder Tag + In-Use Badge */}
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         <span className="text-[10px] font-semibold text-amber-300/90 bg-amber-950/40 border border-amber-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
                           <Folder className="w-2.5 h-2.5" />
                           <span>{meta.folder || 'Percussão'}</span>
@@ -944,6 +963,16 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
                             </>
                           )}
                         </span>
+
+                        {isSampleUsedInRhythms(sample.id, sample.name, rhythms).used && (
+                          <span
+                            title={`Este sample está em uso no(s) ritmo(s): ${isSampleUsedInRhythms(sample.id, sample.name, rhythms).rhythmNames.join(', ')}`}
+                            className="text-[10px] font-semibold text-rose-300 bg-rose-950/60 border border-rose-500/40 px-1.5 py-0.5 rounded flex items-center gap-1"
+                          >
+                            <Lock className="w-2.5 h-2.5 text-rose-400" />
+                            <span>Em uso: {isSampleUsedInRhythms(sample.id, sample.name, rhythms).rhythmNames.join(', ')}</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -961,7 +990,7 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
                       }}
                       className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg border border-slate-700 transition-colors cursor-pointer"
                     >
-                      <Folder className="w-3 h-3 text-cyan-400" />
+                      <Folder className="w-3.5 h-3.5 text-cyan-400" />
                       <span className="hidden sm:inline">Mover Pasta</span>
                     </button>
 
@@ -975,38 +1004,58 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
                       <span>Adicionar à Pista</span>
                     </button>
 
-                    {/* Delete sample from physical folder AND JSON */}
-                    {confirmDeleteId === sample.id ? (
-                      <div className="flex items-center gap-1 bg-rose-950/80 border border-rose-500/50 p-1 rounded-lg">
-                        <span className="text-[10px] text-rose-300 font-bold px-1">
-                          Remover do JSON & Disco?
-                        </span>
+                    {/* Delete sample from physical folder AND JSON (Blocked if used in any rhythm) */}
+                    {(() => {
+                      const usage = isSampleUsedInRhythms(sample.id, sample.name, rhythms);
+                      if (usage.used) {
+                        return (
+                          <button
+                            type="button"
+                            disabled
+                            title={`Não é possível excluir: o sample "${sample.name}" está em uso no(s) ritmo(s): "${usage.rhythmNames.join(', ')}". Remova-o de todos os ritmos para poder excluí-lo.`}
+                            className="p-1.5 text-slate-600 bg-slate-900/40 border border-slate-800/80 rounded-lg cursor-not-allowed opacity-40"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-slate-500" />
+                          </button>
+                        );
+                      }
+
+                      if (confirmDeleteId === sample.id) {
+                        return (
+                          <div className="flex items-center gap-1 bg-rose-950/80 border border-rose-500/50 p-1 rounded-lg">
+                            <span className="text-[10px] text-rose-300 font-bold px-1">
+                              Remover do JSON & Disco?
+                            </span>
+                            <button
+                              type="button"
+                              title="Confirmar exclusão definitiva da pasta física e do arquivo JSON"
+                              onClick={() => executeDeleteSample(sample.id, sample.name)}
+                              className="px-2 py-0.5 bg-rose-500 text-slate-950 font-black text-[10px] rounded hover:bg-rose-400 cursor-pointer"
+                            >
+                              Sim
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-1 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                            >
+                              Não
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return (
                         <button
                           type="button"
-                          title="Confirmar exclusão definitiva"
-                          onClick={() => executeDeleteSample(sample.id, sample.name)}
-                          className="px-2 py-0.5 bg-rose-500 text-slate-950 font-black text-[10px] rounded hover:bg-rose-400 cursor-pointer"
+                          title="Excluir sample da pasta física e do arquivo JSON"
+                          onClick={() => setConfirmDeleteId(sample.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
                         >
-                          Sim
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-1 text-slate-400 hover:text-white text-[10px]"
-                        >
-                          Não
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        title="Excluir sample do disco físico e do arquivo JSON"
-                        onClick={() => setConfirmDeleteId(sample.id)}
-                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                      );
+                    })()}
                   </div>
                 </div>
               );

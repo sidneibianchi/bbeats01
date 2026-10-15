@@ -13,20 +13,24 @@ import {
   Trash2,
   Pencil,
   Check,
+  Lock,
 } from 'lucide-react';
-import { TrackDefinition } from '../types/rhythm';
+import { TrackDefinition, SongProject } from '../types/rhythm';
 import { audioEngine } from '../audio/AudioEngine';
+import { isSampleUsedInRhythms } from '../audio/sampleUsage';
 
 interface SampleManagerModalProps {
   track: TrackDefinition;
   onClose: () => void;
   onUpdateTrackParams: (trackId: string, updates: Partial<TrackDefinition>) => void;
+  rhythms?: SongProject[];
 }
 
 export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
   track,
   onClose,
   onUpdateTrackParams,
+  rhythms = [],
 }) => {
   const [samplesList, setSamplesList] = useState<Array<{ id: string; name: string }>>(() =>
     audioEngine.getCustomSamplesList()
@@ -47,6 +51,14 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
   const [editNameText, setEditNameText] = useState('');
 
   const handleDeleteSample = async (sampleId: string, sampleName: string) => {
+    const usage = isSampleUsedInRhythms(sampleId, sampleName, rhythms);
+    if (usage.used) {
+      setStatusMsg(
+        `⚠️ Bloqueado: o sample "${sampleName}" não pode ser excluído pois está em uso no(s) ritmo(s): "${usage.rhythmNames.join(', ')}". Remova-o do ritmo antes de excluir.`
+      );
+      return;
+    }
+
     await audioEngine.deleteCustomSample(sampleId);
     if (track.customSampleId === sampleId) {
       onUpdateTrackParams(track.id, {
@@ -56,7 +68,7 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
       });
     }
     refreshSamples();
-    setStatusMsg(`Sample "${sampleName}" excluído com sucesso.`);
+    setStatusMsg(`Sample "${sampleName}" excluído com sucesso do disco e do JSON.`);
   };
 
   const handleStartRename = (sampleId: string, currentName: string) => {
@@ -443,15 +455,33 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
                               Ativo
                             </span>
                           )}
-                          <button
-                            type="button"
-                            title="Excluir este sample da biblioteca"
-                            onClick={() => handleDeleteSample(s.id, s.name)}
-                            className="flex items-center gap-1 px-2 py-1 bg-rose-950/50 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-900 hover:border-rose-500 rounded text-[11px] cursor-pointer font-semibold transition-colors shadow-xs"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            <span>Excluir</span>
-                          </button>
+                          {(() => {
+                            const usage = isSampleUsedInRhythms(s.id, s.name, rhythms);
+                            if (usage.used) {
+                              return (
+                                <button
+                                  type="button"
+                                  disabled
+                                  title={`Bloqueado: em uso no(s) ritmo(s) "${usage.rhythmNames.join(', ')}". Remova-o antes de excluir.`}
+                                  className="flex items-center gap-1 px-2 py-1 bg-slate-900 border border-slate-800 text-slate-500 rounded text-[11px] cursor-not-allowed opacity-50 shadow-xs"
+                                >
+                                  <Lock className="w-3 h-3 text-slate-500" />
+                                  <span>Em uso</span>
+                                </button>
+                              );
+                            }
+                            return (
+                              <button
+                                type="button"
+                                title="Excluir este sample da biblioteca e do disco"
+                                onClick={() => handleDeleteSample(s.id, s.name)}
+                                className="flex items-center gap-1 px-2 py-1 bg-rose-950/50 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-900 hover:border-rose-500 rounded text-[11px] cursor-pointer font-semibold transition-colors shadow-xs"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Excluir</span>
+                              </button>
+                            );
+                          })()}
                         </div>
                       </div>
                     );

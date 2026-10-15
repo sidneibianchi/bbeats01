@@ -11,6 +11,8 @@ import {
   deleteSampleFromStorage,
   renameSampleInStorage,
   isHtmlResponse,
+  getDeletedSamplesList,
+  addDeletedSample,
 } from './sampleStorage';
 import { BUILT_IN_SAMPLES } from '../presets/defaultSamples';
 
@@ -304,10 +306,19 @@ export class AudioEngine {
         } catch {}
       }
 
-      // 3. Fallback: Always ensure all built-in catalog samples exist in the list
-      const existingIds = new Set(samples.map((s) => s.id));
-      for (const b of BUILT_IN_SAMPLES) {
-        if (!existingIds.has(b.id)) {
+      // 3. Filter out samples that were deleted by the user
+      const deletedList = getDeletedSamplesList();
+      const deletedSet = new Set(deletedList.map((d) => d.toLowerCase()));
+      samples = samples.filter(
+        (s) =>
+          !deletedSet.has(s.id.toLowerCase()) &&
+          !deletedSet.has(s.name.toLowerCase()) &&
+          !deletedSet.has(((s as any).fileName || '').toLowerCase())
+      );
+
+      // Only inject default built-in catalog on first virgin install
+      if (samples.length === 0 && deletedSet.size === 0) {
+        for (const b of BUILT_IN_SAMPLES) {
           samples.push({
             id: b.id,
             name: b.name,
@@ -526,7 +537,9 @@ export class AudioEngine {
         deleted = true;
       }
     }
-    await deleteSampleFromStorage(id);
+    addDeletedSample(id);
+    if (targetName) addDeletedSample(targetName);
+    await deleteSampleFromStorage(id, targetName);
     try {
       await fetch(`/api/samples/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (targetName && targetName !== id) {
@@ -820,8 +833,8 @@ export class AudioEngine {
     if (!this.isPlaying || this.isOutroPlaying || this.isOutroQueued) return;
     const subPerBar = this.getStepsPerBar();
     const curSubInBar = this.globalTick % subPerBar;
-    // Calculate steps until the end of the current bar (compasso)
-    const stepsUntilBarEnd = curSubInBar === 0 ? 0 : (subPerBar - curSubInBar);
+    // Calculate steps until the end of the current bar (compasso). Always wait for current bar to finish!
+    const stepsUntilBarEnd = curSubInBar === 0 ? subPerBar : (subPerBar - curSubInBar);
 
     this.isOutroQueued = true;
     this.outroStartTick = this.globalTick + stepsUntilBarEnd;
