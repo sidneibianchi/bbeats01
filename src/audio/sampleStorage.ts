@@ -549,6 +549,20 @@ export async function saveRhythmsToServer(rhythms: unknown[]): Promise<boolean> 
       console.warn(`Failed to save shared rhythms (${resp.status}).`);
       return false;
     }
+
+    const result: unknown = await resp.json();
+    if (
+      !result ||
+      typeof result !== 'object' ||
+      !('success' in result) ||
+      result.success !== true ||
+      !('count' in result) ||
+      result.count !== rhythms.length
+    ) {
+      console.error('Rhythm API did not confirm that all rhythms were saved:', result);
+      return false;
+    }
+
     return true;
   } catch (err) {
     console.warn('Failed to save rhythms to server:', err);
