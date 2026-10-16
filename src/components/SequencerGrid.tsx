@@ -17,7 +17,16 @@ import {
   X,
   SlidersHorizontal,
 } from 'lucide-react';
-import { SongPartId, StepData, TrackDefinition, RhythmicResolution } from '../types/rhythm';
+import {
+  getPartBarCount,
+  getStepsPerBar,
+  getSubdivisionsPerBeat,
+  SongPartId,
+  StepData,
+  TrackDefinition,
+  RhythmicResolution,
+  TimeSignature,
+} from '../types/rhythm';
 
 export const TRACK_PALETTE = [
   '#ef4444', // Vermelho
@@ -46,7 +55,7 @@ interface SequencerGridProps {
   isPlaying: boolean;
   resolution?: RhythmicResolution;
   barsCount?: number;
-  timeSignature?: string;
+  timeSignature?: TimeSignature;
   onResolutionChange?: (res: RhythmicResolution) => void;
   onBarsCountChange?: (bars: number) => void;
   onToggleStep: (trackId: string, stepIndex: number) => void;
@@ -68,12 +77,12 @@ export const SequencerGrid: React.FC<SequencerGridProps> = ({
   tracks,
   partSteps,
   partStepCounts: _partStepCounts,
-  activePartId: _activePartId,
+  activePartId,
   playingTick: _playingTick,
   activeTrackSteps,
   isPlaying,
-  resolution: _resolution = '1/32',
-  barsCount = 1,
+  resolution = '1/32',
+  barsCount: _barsCount = 1,
   timeSignature = '4/4',
   onResolutionChange: _onResolutionChange,
   onBarsCountChange: _onBarsCountChange,
@@ -117,33 +126,10 @@ export const SequencerGrid: React.FC<SequencerGridProps> = ({
   dragRef.current = draggingStep;
 
   // Fusa por padrão (8 subdivisões por tempo / 1/32)
-  const subPerBeat = 8;
-  const beatsPerBar =
-    timeSignature === '3/4'
-      ? 3
-      : timeSignature === '5/4'
-      ? 5
-      : timeSignature === '7/8'
-      ? 7
-      : timeSignature === '6/8'
-      ? 6
-      : timeSignature === '12/8'
-      ? 12
-      : 4;
-
-  const stepsPerBar =
-    timeSignature === '3/4'
-      ? 3 * subPerBeat
-      : timeSignature === '6/8'
-      ? Math.max(6, Math.round(6 * (subPerBeat / 2)))
-      : timeSignature === '7/8'
-      ? Math.max(7, Math.round(7 * (subPerBeat / 2)))
-      : timeSignature === '12/8'
-      ? Math.max(12, Math.round(12 * (subPerBeat / 4)))
-      : beatsPerBar * subPerBeat;
-
-  const totalBars = barsCount || 1;
-  const totalDisplaySteps = Math.min(64, stepsPerBar * totalBars);
+  const subPerBeat = getSubdivisionsPerBeat(resolution);
+  const stepsPerBar = getStepsPerBar(timeSignature, resolution);
+  const totalBars = getPartBarCount(activePartId);
+  const totalDisplaySteps = stepsPerBar * totalBars;
 
   // Handle pointer down for vertical velocity dragging
   const handleStepPointerDown = (

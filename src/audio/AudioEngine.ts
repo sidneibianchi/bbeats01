@@ -4,7 +4,13 @@
  */
 
 import { PercussionSynthesizer, SoundParams } from './synthEngine';
-import { SongPartId, SongProject } from '../types/rhythm';
+import {
+  getPartBarCount,
+  getStepsPerBar as getProjectStepsPerBar,
+  getSubdivisionsPerBeat as getProjectSubdivisionsPerBeat,
+  SongPartId,
+  SongProject,
+} from '../types/rhythm';
 import {
   saveSampleToStorage,
   getAllStoredSamples,
@@ -64,6 +70,7 @@ export class AudioEngine {
   private nextStepTime: number = 0.0;
   private globalTick: number = 0;
   private timerId: number | null = null;
+  private partStartTicks = new Map<SongPartId, number>();
 
   // BeatBuddy Live Logic (Pedal 1 & Pedal 2)
   private currentPartId: SongPartId = 'verse';
@@ -73,7 +80,9 @@ export class AudioEngine {
   private activeFillId: SongPartId | null = null;
   private fillEndTick: number | null = null;
   private activeTransitionId: SongPartId | null = null;
+  private transitionStartTick: number | null = null;
   private transitionEndTick: number | null = null;
+  private isTransitionQueued: boolean = false;
   private isTransitioning: boolean = false;
   private isOutroPlaying: boolean = false;
   private isOutroQueued: boolean = false;
@@ -157,6 +166,8 @@ export class AudioEngine {
       this.currentPartId = 'verse';
       this.basePartId = 'verse';
       this.selectedStartPart = 'verse';
+      this.partStartTicks.clear();
+      this.setPartStartTick('verse', this.globalTick);
       this.callbacks?.onRhythmChanged?.(this.currentProject, this.bpm);
       return;
     }
@@ -619,36 +630,14 @@ export class AudioEngine {
   }
 
   public getSubdivisionsPerBeat(): number {
-    const res = this.currentProject?.resolution || '1/32';
-    switch (res) {
-      case '1/4':
-        return 1;
-      case '1/8':
-        return 2;
-      case '1/8T':
-        return 3;
-      case '1/16':
-        return 4;
-      case '1/16T':
-        return 6;
-      case '1/32':
-        return 8;
-      case '1/64':
-        return 16;
-      default:
-        return 8; // Fusa (1/32) default
-    }
+    return getProjectSubdivisionsPerBeat(this.currentProject?.resolution || '1/32');
   }
 
   public getStepsPerBar(): number {
-    const subPerBeat = this.getSubdivisionsPerBeat();
-    const timeSig = this.currentProject?.timeSignature || '4/4';
-    if (timeSig === '3/4') return 3 * subPerBeat;
-    if (timeSig === '6/8') return Math.max(6, Math.round(6 * (subPerBeat / 2)));
-    if (timeSig === '7/8') return Math.max(7, Math.round(7 * (subPerBeat / 2)));
-    if (timeSig === '5/4') return 5 * subPerBeat;
-    if (timeSig === '12/8') return Math.max(12, Math.round(12 * (subPerBeat / 4)));
-    return 4 * subPerBeat; // 4/4 default
+    return getProjectStepsPerBar(
+      this.currentProject?.timeSignature || '4/4',
+      this.currentProject?.resolution || '1/32'
+    );
   }
 
   // Direct trigger for pad auditioning
@@ -717,6 +706,10 @@ export class AudioEngine {
     );
   }
 
+  private setPartStartTick(partId: SongPartId, tick = this.globalTick) {
+    this.partStartTicks.set(partId, tick);
+  }
+
   // --- BeatBuddy Live Pedal Actions ---
   // PEDAL 1:
   // IN STOP: TAP -> INTRO
@@ -732,12 +725,13 @@ export class AudioEngine {
       this.isIntroPlaying = false;
       this.introEndTick = null;
       this.currentPartId = this.basePartId || 'verse';
+      this.setPartStartTick(this.currentPartId);
       this.notifyPedalState();
       this.callbacks?.onPartAutoAdvance?.(this.currentPartId);
       return;
     }
     // Trigger dynamic fill strictly matching the current base part
-    if (!this.activeFillId && !this.isTransitioning && !this.isOutroPlaying) {
+    if (!this.activeFillId && !this.isTransitionQueued && !this.isTransitioning && !this.isOutroPlaying) {
       if (this.basePartId === 'part_c') {
         this.triggerFill('fill_c');
       } else if (this.basePartId === 'part_b') {
@@ -786,13 +780,14 @@ export class AudioEngine {
       }
       this.basePartId = this.selectedStartPart;
       this.currentPartId = this.selectedStartPart;
+      this.setPartStartTick(this.currentPartId);
       this.notifyPedalState();
       this.callbacks?.onPartAutoAdvance?.(this.currentPartId);
       return;
     }
 
     // In Play:
-    if (!this.isTransitioning && !this.isOutroPlaying) {
+    if (!this.isTransitionQueued && !this.isTransitioning && !this.isOutroPlaying) {
       if (this.basePartId === 'part_b') {
         if (isDoubleTap) {
           // 2 toques rápidos: Volta para a Parte A
@@ -818,8 +813,9 @@ export class AudioEngine {
 
   // Trigger Fill (Fill A or Fill B) with bar quantization
   public triggerFill(fillId: SongPartId = 'fill_a') {
-    if (!this.isPlaying) return;
+    if (!this.isPlaying || this.isTransitionQueued || this.isTransitioning) return;
     this.activeFillId = fillId;
+    this.setPartStartTick(fillId);
     const subPerBar = this.getStepsPerBar();
     const curSubInBar = this.globalTick % subPerBar;
     // If tapped late in the bar (last 25% of measure), extend fill to next bar
@@ -833,28 +829,41 @@ export class AudioEngine {
 
   // Trigger Transition (A->B or B->A)
   public triggerTransition(transitionId: SongPartId = 'transition_a_b', targetPart: SongPartId = 'part_b') {
-    if (!this.isPlaying) return;
-    this.isTransitioning = true;
+    if (!this.isPlaying || this.isTransitionQueued || this.isTransitioning) return;
+    this.isTransitionQueued = true;
     this.activeTransitionId = transitionId;
     this.targetPartId = targetPart;
-    this.activeFillId = null;
-    const subPerBar = this.getStepsPerBar();
-    const curSubInBar = this.globalTick % subPerBar;
-    if (curSubInBar >= Math.floor(subPerBar * 0.75)) {
-      this.transitionEndTick = this.globalTick + (subPerBar - curSubInBar) + subPerBar;
-    } else {
-      this.transitionEndTick = this.globalTick + (subPerBar - curSubInBar);
-    }
-    this.notifyPedalState();
+    const stepsPerBar = this.getStepsPerBar();
+    const partStartTick = this.partStartTicks.get(this.basePartId) ?? this.globalTick;
+    const elapsedPartTicks = Math.max(0, this.globalTick - partStartTick);
+    const completedBars = Math.floor(elapsedPartTicks / stepsPerBar) + 1;
+    this.transitionStartTick = partStartTick + completedBars * stepsPerBar;
+    this.transitionEndTick = this.transitionStartTick + stepsPerBar;
   }
 
   // Trigger Outro (Ending) - Waits for the currently playing bar (compasso) to finish first!
   public triggerOutro() {
     if (!this.isPlaying || this.isOutroPlaying || this.isOutroQueued) return;
-    const subPerBar = this.getStepsPerBar();
-    const curSubInBar = this.globalTick % subPerBar;
-    // Calculate steps until the end of the current bar (compasso). Always wait for current bar to finish!
-    const stepsUntilBarEnd = curSubInBar === 0 ? subPerBar : (subPerBar - curSubInBar);
+    if (this.isTransitionQueued && !this.isTransitioning) {
+      this.isTransitionQueued = false;
+      this.activeTransitionId = null;
+      this.targetPartId = null;
+      this.transitionStartTick = null;
+      this.transitionEndTick = null;
+    }
+
+    let currentPlaybackPart = this.currentPartId;
+    if (this.isTransitioning && this.activeTransitionId) {
+      currentPlaybackPart = this.activeTransitionId;
+    } else if (this.activeFillId) {
+      currentPlaybackPart = this.activeFillId;
+    } else if (this.isIntroPlaying) {
+      currentPlaybackPart = 'intro';
+    }
+    const stepsPerBar = this.getStepsPerBar();
+    const partStartTick = this.partStartTicks.get(currentPlaybackPart) ?? this.globalTick;
+    const elapsedPartTicks = Math.max(0, this.globalTick - partStartTick);
+    const stepsUntilBarEnd = stepsPerBar - (elapsedPartTicks % stepsPerBar);
 
     this.isOutroQueued = true;
     this.outroStartTick = this.globalTick + stepsUntilBarEnd;
@@ -870,14 +879,19 @@ export class AudioEngine {
 
   public selectPart(partId: SongPartId) {
     this.currentPartId = partId;
+    this.setPartStartTick(partId);
     if (partId === 'verse' || partId === 'part_b' || partId === 'part_c') {
       this.basePartId = partId;
       this.selectedStartPart = partId;
     }
     this.isIntroPlaying = partId === 'intro';
     this.activeFillId = null;
+    this.isTransitionQueued = false;
     this.isTransitioning = false;
     this.activeTransitionId = null;
+    this.transitionStartTick = null;
+    this.transitionEndTick = null;
+    this.targetPartId = null;
     this.isOutroPlaying = partId === 'outro';
     this.notifyPedalState();
   }
@@ -898,33 +912,30 @@ export class AudioEngine {
     this.selectedStartPart = partId;
     this.basePartId = partId;
     this.currentPartId = partId;
+    this.setPartStartTick(partId);
     this.notifyPedalState();
   }
 
   public getIntroFullBarSteps(): number {
     const stepsPerBar = this.getStepsPerBar();
-    const projBars = this.currentProject?.barsCount || 1;
-    const baseSteps = stepsPerBar * projBars;
     const introCounts = this.currentProject?.parts?.intro?.trackStepCounts;
     if (introCounts && Object.values(introCounts).length > 0) {
       const maxCount = Math.max(...Object.values(introCounts));
-      const barsNeeded = Math.max(projBars, Math.ceil(maxCount / stepsPerBar));
+      const barsNeeded = Math.max(1, Math.ceil(maxCount / stepsPerBar));
       return barsNeeded * stepsPerBar;
     }
-    return baseSteps;
+    return stepsPerBar;
   }
 
   public getOutroFullBarSteps(): number {
     const stepsPerBar = this.getStepsPerBar();
-    const projBars = this.currentProject?.barsCount || 1;
-    const baseSteps = stepsPerBar * projBars;
     const outroCounts = this.currentProject?.parts?.outro?.trackStepCounts;
     if (outroCounts && Object.values(outroCounts).length > 0) {
       const maxCount = Math.max(...Object.values(outroCounts));
       const barsNeeded = Math.max(1, Math.ceil(maxCount / stepsPerBar));
       return barsNeeded * stepsPerBar;
     }
-    return baseSteps;
+    return stepsPerBar;
   }
 
   // Helper to look up part data with backward compatible aliases
@@ -992,9 +1003,11 @@ export class AudioEngine {
 
     this.isPlaying = true;
     this.globalTick = 0;
+    this.partStartTicks.clear();
     this.nextStepTime = this.ctx.currentTime + 0.05;
 
     this.currentPartId = 'intro';
+    this.setPartStartTick('intro', 0);
     this.isIntroPlaying = true;
     this.introEndTick = this.getIntroFullBarSteps();
     this.basePartId = this.selectedStartPart || 'verse';
@@ -1017,6 +1030,7 @@ export class AudioEngine {
 
     this.isPlaying = true;
     this.globalTick = 0;
+    this.partStartTicks.clear();
     this.nextStepTime = this.ctx.currentTime + 0.05;
 
     const hasIntro = this.hasIntroNotes();
@@ -1026,11 +1040,13 @@ export class AudioEngine {
 
     if (shouldPlayIntro) {
       this.currentPartId = 'intro';
+      this.setPartStartTick('intro', 0);
       this.isIntroPlaying = true;
       this.introEndTick = this.getIntroFullBarSteps();
     } else {
       this.currentPartId = this.selectedStartPart || 'verse';
       this.basePartId = this.currentPartId;
+      this.setPartStartTick(this.currentPartId, 0);
       this.isIntroPlaying = false;
       this.introEndTick = null;
     }
@@ -1049,10 +1065,13 @@ export class AudioEngine {
       this.timerId = null;
     }
     this.globalTick = 0;
+    this.partStartTicks.clear();
     this.activeFillId = null;
     this.fillEndTick = null;
     this.isTransitioning = false;
+    this.isTransitionQueued = false;
     this.activeTransitionId = null;
+    this.transitionStartTick = null;
     this.targetPartId = null;
     this.transitionEndTick = null;
     this.isOutroPlaying = false;
@@ -1063,6 +1082,7 @@ export class AudioEngine {
     this.introEndTick = null;
     this.currentPartId = this.selectedStartPart || 'verse';
     this.basePartId = this.currentPartId;
+    this.setPartStartTick(this.currentPartId, 0);
     this.callbacks?.onPlaybackStateChange(false);
     this.notifyPedalState();
   }
@@ -1139,6 +1159,8 @@ export class AudioEngine {
       this.currentPartId = 'verse';
       this.basePartId = 'verse';
       this.selectedStartPart = 'verse';
+      this.partStartTicks.clear();
+      this.setPartStartTick('verse');
       this.isIntroPlaying = false;
       this.introEndTick = null;
       this.isOutroPlaying = false;
@@ -1146,7 +1168,9 @@ export class AudioEngine {
       this.activeFillId = null;
       this.fillEndTick = null;
       this.isTransitioning = false;
+      this.isTransitionQueued = false;
       this.activeTransitionId = null;
+      this.transitionStartTick = null;
       this.transitionEndTick = null;
       this.targetPartId = null;
 
@@ -1162,14 +1186,30 @@ export class AudioEngine {
       this.notifyPedalState();
     }
 
+    // Start a queued transition after the current bar has completed.
+    if (
+      this.isTransitionQueued &&
+      this.transitionStartTick !== null &&
+      this.globalTick >= this.transitionStartTick
+    ) {
+      this.isTransitionQueued = false;
+      this.isTransitioning = true;
+      this.activeFillId = null;
+      this.fillEndTick = null;
+      if (this.activeTransitionId) this.setPartStartTick(this.activeTransitionId, this.transitionStartTick);
+      this.notifyPedalState();
+    }
+
     // Transition completion
     if (this.isTransitioning && this.transitionEndTick !== null && this.globalTick >= this.transitionEndTick) {
       this.isTransitioning = false;
+      this.transitionStartTick = null;
       this.activeTransitionId = null;
       this.transitionEndTick = null;
       if (this.targetPartId) {
         this.currentPartId = this.targetPartId;
         this.basePartId = this.targetPartId;
+        this.setPartStartTick(this.targetPartId);
         this.targetPartId = null;
       }
       this.notifyPedalState();
@@ -1181,6 +1221,7 @@ export class AudioEngine {
       this.isIntroPlaying = false;
       this.introEndTick = null;
       this.currentPartId = this.basePartId || 'verse';
+      this.setPartStartTick(this.currentPartId);
       this.notifyPedalState();
       this.callbacks?.onPartAutoAdvance?.(this.currentPartId);
     }
@@ -1192,9 +1233,12 @@ export class AudioEngine {
       this.activeFillId = null;
       this.fillEndTick = null;
       this.isTransitioning = false;
+      this.isTransitionQueued = false;
       this.activeTransitionId = null;
+      this.transitionStartTick = null;
       this.transitionEndTick = null;
       this.currentPartId = 'outro';
+      this.setPartStartTick('outro');
       this.notifyPedalState();
       this.callbacks?.onPartAutoAdvance?.('outro');
     }
@@ -1252,15 +1296,16 @@ export class AudioEngine {
       if (anySolo && !trackDef.solo) return;
 
       const trackSteps = partData.trackSteps[trackDef.id] || [];
-      const globalCycleSteps = stepsPerBar * (this.currentProject?.barsCount || 1);
       const trackStepCount =
         partData.trackStepCounts?.[trackDef.id] ||
-        globalCycleSteps ||
+        stepsPerBar * getPartBarCount(effectivePartId) ||
         trackSteps.length ||
         16;
 
       if (trackStepCount === 0) return;
-      const stepIndex = tick % trackStepCount;
+      const partStartTick = this.partStartTicks.get(effectivePartId) ?? 0;
+      const elapsedPartTicks = tick - partStartTick;
+      const stepIndex = ((elapsedPartTicks % trackStepCount) + trackStepCount) % trackStepCount;
       trackStepsMap[trackDef.id] = stepIndex;
 
       const step =

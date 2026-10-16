@@ -29,6 +29,44 @@ export type SongPartId =
   | 'outro' // End
   | (string & {});
 
+export function getPartBarCount(partId: SongPartId | string): number {
+  return ['verse', 'part_a', 'part_b', 'part_c'].includes(partId) ? 2 : 1;
+}
+
+export function getSubdivisionsPerBeat(resolution: RhythmicResolution = '1/32'): number {
+  switch (resolution) {
+    case '1/4':
+      return 1;
+    case '1/8':
+      return 2;
+    case '1/8T':
+      return 3;
+    case '1/16':
+      return 4;
+    case '1/16T':
+      return 6;
+    case '1/32':
+      return 8;
+    case '1/64':
+      return 16;
+    default:
+      return 8;
+  }
+}
+
+export function getStepsPerBar(
+  timeSignature: TimeSignature = '4/4',
+  resolution: RhythmicResolution = '1/32'
+): number {
+  const subdivisionsPerBeat = getSubdivisionsPerBeat(resolution);
+  if (timeSignature === '3/4') return 3 * subdivisionsPerBeat;
+  if (timeSignature === '6/8') return Math.max(6, Math.round(6 * (subdivisionsPerBeat / 2)));
+  if (timeSignature === '7/8') return Math.max(7, Math.round(7 * (subdivisionsPerBeat / 2)));
+  if (timeSignature === '12/8') return Math.max(12, Math.round(12 * (subdivisionsPerBeat / 4)));
+  if (timeSignature === '5/4') return 5 * subdivisionsPerBeat;
+  return 4 * subdivisionsPerBeat;
+}
+
 export type InstrumentCategory =
   | 'kick'
   | 'snare'
