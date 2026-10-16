@@ -6,11 +6,12 @@ import {
   FolderUp,
   FileCode,
   HardDrive,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface HeaderProps {
-  activeView: 'sequencer' | 'pedal' | 'samples';
-  onSelectView: (view: 'sequencer' | 'pedal' | 'samples') => void;
+  activeView: 'sequencer' | 'pedal' | 'samples' | 'mixer';
+  onSelectView: (view: 'sequencer' | 'pedal' | 'samples' | 'mixer') => void;
   onOpenCreateModal: () => void;
   onOpenFootswitchModal?: () => void;
   onOpenMobileGuide?: () => void;
@@ -103,6 +104,19 @@ export const Header: React.FC<HeaderProps> = ({
           }`}
         >
           🎵 Pasta de Samples
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelectView('mixer')}
+          aria-label="Abrir mixer de trilhas"
+          className={`flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 transition-colors ${
+            activeView === 'mixer'
+              ? 'border-amber-400/60 bg-amber-400 text-slate-950 font-bold'
+              : 'border-slate-700 bg-slate-900 text-slate-300 hover:text-white md:border-transparent md:bg-transparent'
+          }`}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Mixer</span>
         </button>
       </nav>
 

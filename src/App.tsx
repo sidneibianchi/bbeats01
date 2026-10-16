@@ -24,6 +24,7 @@ import { AudioVisualizer } from './components/AudioVisualizer';
 import { MobileAndPedalGuideModal } from './components/MobileAndPedalGuideModal';
 import { ShareMobileModal } from './components/ShareMobileModal';
 import { LocalFileManagerModal } from './components/LocalFileManagerModal';
+import { MixerView } from './components/MixerView';
 import { Volume2 } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine';
 import {
@@ -159,7 +160,7 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const [activeView, setActiveView] = useState<'sequencer' | 'pedal' | 'samples'>('sequencer');
+  const [activeView, setActiveView] = useState<'sequencer' | 'pedal' | 'samples' | 'mixer'>('sequencer');
   const [isServerLoaded, setIsServerLoaded] = useState(false);
   const [activePartId, setActivePartId] = useState<SongPartId>('verse');
   const [playingPartId, setPlayingPartId] = useState<SongPartId>('verse');
@@ -1763,6 +1764,11 @@ export default function App() {
             setIsManualMobileLiveView(false);
             setForceDesktopMode(true);
           }}
+          onOpenMixer={() => {
+            setIsManualMobileLiveView(false);
+            setForceDesktopMode(true);
+            setActiveView('mixer');
+          }}
           isAudioUnlocked={isAudioUnlocked}
           onUnlockAudio={() => {
             audioEngine.unlockAudioContext();
@@ -2143,6 +2149,16 @@ export default function App() {
             onRenameSample={handleRenameSample}
             customSamplesList={customSamplesList}
             rhythms={rhythms}
+          />
+        )}
+
+        {activeView === 'mixer' && (
+          <MixerView
+            project={project}
+            onUpdateTrackVolume={(trackId, volume) =>
+              handleUpdateTrackParams(trackId, { volume })
+            }
+            onUpdateTrackPan={(trackId, pan) => handleUpdateTrackParams(trackId, { pan })}
           />
         )}
       </main>

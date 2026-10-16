@@ -207,26 +207,25 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
 
   const handleClearLocalLibrary = async () => {
     const confirmed = window.confirm(
-      'Um backup dos dados locais será baixado antes da limpeza. Isso remove ritmos e samples deste navegador, mas não altera nada no Neon. Continuar?'
+      'Nenhum backup será baixado. Isso remove o cache de ritmos, samples e preferências locais deste dispositivo e navegador, sem alterar os dados salvos no Neon. Para limpar outro dispositivo, repita a ação nele. Continuar?'
     );
     if (!confirmed) return;
 
     setIsProcessing(true);
     setFeedback(null);
     try {
-      await exportFullLibraryBackup();
       await clearLocalRhythmAndSampleCache();
       setFeedback({
         type: 'success',
-        message: 'Backup baixado e cache local limpo. O Neon não foi alterado; a página será recarregada.',
+        message: 'Cache local limpo. O Neon não foi alterado; a página será recarregada.',
       });
-      onShowToast('Backup criado e dados locais removidos; dados do Neon preservados.');
+      onShowToast('Cache local limpo; dados do Neon preservados.');
       window.setTimeout(() => window.location.reload(), 1500);
     } catch (error) {
-      console.error('Failed to back up and clear local rhythm/sample data:', error);
+      console.error('Failed to clear local rhythm/sample data:', error);
       setFeedback({
         type: 'error',
-        message: 'Não foi possível concluir a limpeza. Verifique se o navegador permite baixar o backup e tente novamente.',
+        message: 'Não foi possível limpar o cache local. Tente novamente.',
       });
     } finally {
       setIsProcessing(false);
@@ -577,7 +576,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                     Limpar ritmos e samples deste navegador
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                    Baixa um backup antes de apagar o cache de ritmos, samples do IndexedDB e preferências locais de samples. Os dados do Neon não são alterados e serão carregados novamente após a limpeza.
+                    Limpa o cache de ritmos, samples do IndexedDB e preferências locais neste dispositivo e navegador. Nenhum arquivo será baixado. Os dados salvos no Neon não são alterados. Para limpar o cache do celular e do computador, use este botão em cada dispositivo.
                   </p>
                 </div>
                 <button
@@ -587,7 +586,7 @@ export const LocalFileManagerModal: React.FC<LocalFileManagerModalProps> = ({
                   className="px-3 py-2 text-xs font-semibold rounded-lg bg-rose-950 text-rose-200 hover:bg-rose-700 border border-rose-500/40 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>{isProcessing ? 'Processando...' : 'Baixar backup e limpar cache local'}</span>
+                  <span>{isProcessing ? 'Limpando...' : 'Limpar cache local'}</span>
                 </button>
               </div>
             </div>
