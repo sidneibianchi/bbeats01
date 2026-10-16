@@ -19,6 +19,7 @@ import {
   Hash,
   Tag,
   HardDrive,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { SongPartId, SongProject } from '../types/rhythm';
 import { RhythmNumberModal } from './RhythmNumberModal';
@@ -56,6 +57,7 @@ interface MobileLiveViewProps {
   onTogglePedalEnabled: () => void;
   onOpenFootswitchModal: () => void;
   onOpenStudioView?: () => void;
+  onOpenMixer?: () => void;
   onOpenLocalFileManager?: () => void;
   // Audio unlock
   isAudioUnlocked: boolean;
@@ -154,6 +156,7 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
   onTogglePedalEnabled,
   onOpenFootswitchModal,
   onOpenStudioView,
+  onOpenMixer,
   onOpenLocalFileManager,
   isAudioUnlocked,
   onUnlockAudio,
@@ -380,6 +383,18 @@ export const MobileLiveView: React.FC<MobileLiveViewProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {onOpenMixer && (
+            <button
+              type="button"
+              onClick={onOpenMixer}
+              title="Abrir mixer de trilhas"
+              aria-label="Abrir mixer de trilhas"
+              className="p-1 rounded-lg bg-slate-900 border border-amber-500/50 text-amber-300 hover:bg-amber-500/20 cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {/* Pedal Ligado / Desativado Toggle */}
           <button
             type="button"
