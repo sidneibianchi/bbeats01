@@ -251,7 +251,7 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
     try {
       const folderToAssign = activeFolderFilter !== 'all' ? activeFolderFilter : 'Percussão';
       const subFolderToAssign = activeSubFolderFilter !== 'all' ? activeSubFolderFilter : undefined;
-      let cloudFailures = 0;
+      const cloudErrors: string[] = [];
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -260,7 +260,9 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
         try {
           await saveSampleToDatabase(file, id);
         } catch (error) {
-          cloudFailures++;
+          cloudErrors.push(
+            error instanceof Error ? error.message : 'Erro desconhecido no upload'
+          );
           console.error(`Failed to sync sample "${file.name}" to cloud:`, error);
         }
 
@@ -276,8 +278,8 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
       }
       refreshList();
       const cloudWarning =
-        cloudFailures > 0
-          ? ` Falha ao sincronizar ${cloudFailures} sample(s) com a nuvem; os arquivos locais foram mantidos.`
+        cloudErrors.length > 0
+          ? ` Falha ao sincronizar ${cloudErrors.length} sample(s) com a nuvem; os arquivos locais foram mantidos. Motivo: ${cloudErrors[0]}`
           : '';
       setStatusMessage(`Samples carregados e organizados na pasta "${folderToAssign}"!${cloudWarning}`);
     } catch {
@@ -318,7 +320,9 @@ export const SamplesLibraryView: React.FC<SamplesLibraryViewProps> = ({
             );
           } catch (error) {
             console.error('Failed to sync recording to cloud:', error);
-            cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+            cloudWarning = error instanceof Error
+              ? ` (salvo localmente; falha na nuvem: ${error.message})`
+              : ' (salvo localmente; falha ao sincronizar com a nuvem)';
           }
 
           const folderToAssign = activeFolderFilter !== 'all' ? activeFolderFilter : 'Efeitos';

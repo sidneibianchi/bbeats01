@@ -59,13 +59,20 @@ export async function uploadSampleToUploadThing(
     }),
   });
 
-  const result = (await response.json()) as
-    | SampleUploadResult
-    | { success: false; error?: string };
+  let result: SampleUploadResult | { success: false; error?: string };
+  try {
+    result = (await response.json()) as
+      | SampleUploadResult
+      | { success: false; error?: string };
+  } catch {
+    throw new Error(`Upload falhou com HTTP ${response.status}; o servidor não retornou detalhes.`);
+  }
 
   if (!response.ok || !result.success) {
     throw new Error(
-      'error' in result && result.error ? result.error : 'Failed to upload sample'
+      'error' in result && result.error
+        ? result.error
+        : `Falha ao enviar sample (HTTP ${response.status})`
     );
   }
 

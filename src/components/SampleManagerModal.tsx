@@ -136,7 +136,9 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
         await saveSampleToDatabase(file, sampleId);
       } catch (error) {
         console.error('Failed to sync sample to cloud:', error);
-        cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+        cloudWarning = error instanceof Error
+          ? ` (salvo localmente; falha na nuvem: ${error.message})`
+          : ' (salvo localmente; falha ao sincronizar com a nuvem)';
       }
       onUpdateTrackParams(track.id, {
         customSampleId: sampleId,
@@ -186,7 +188,9 @@ export const SampleManagerModal: React.FC<SampleManagerModalProps> = ({
             );
           } catch (error) {
             console.error('Failed to sync recording to cloud:', error);
-            cloudWarning = ' (salvo localmente; falha ao sincronizar com a nuvem)';
+            cloudWarning = error instanceof Error
+              ? ` (salvo localmente; falha na nuvem: ${error.message})`
+              : ' (salvo localmente; falha ao sincronizar com a nuvem)';
           }
           onUpdateTrackParams(track.id, {
             customSampleId: sampleId,
