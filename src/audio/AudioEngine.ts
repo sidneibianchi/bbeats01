@@ -79,6 +79,7 @@ export class AudioEngine {
   private targetPartId: SongPartId | null = null;
   private activeFillId: SongPartId | null = null;
   private fillEndTick: number | null = null;
+  private fillReturnCrashTick: number | null = null;
   private activeTransitionId: SongPartId | null = null;
   private transitionStartTick: number | null = null;
   private transitionEndTick: number | null = null;
@@ -815,6 +816,7 @@ export class AudioEngine {
   public triggerFill(fillId: SongPartId = 'fill_a') {
     if (!this.isPlaying || this.isTransitionQueued || this.isTransitioning) return;
     this.activeFillId = fillId;
+    this.fillReturnCrashTick = null;
     this.setPartStartTick(fillId);
     const subPerBar = this.getStepsPerBar();
     const curSubInBar = this.globalTick % subPerBar;
@@ -886,6 +888,7 @@ export class AudioEngine {
     }
     this.isIntroPlaying = partId === 'intro';
     this.activeFillId = null;
+    this.fillReturnCrashTick = null;
     this.isTransitionQueued = false;
     this.isTransitioning = false;
     this.activeTransitionId = null;
@@ -1003,6 +1006,7 @@ export class AudioEngine {
 
     this.isPlaying = true;
     this.globalTick = 0;
+    this.fillReturnCrashTick = null;
     this.partStartTicks.clear();
     this.nextStepTime = this.ctx.currentTime + 0.05;
 
@@ -1068,6 +1072,7 @@ export class AudioEngine {
     this.partStartTicks.clear();
     this.activeFillId = null;
     this.fillEndTick = null;
+    this.fillReturnCrashTick = null;
     this.isTransitioning = false;
     this.isTransitionQueued = false;
     this.activeTransitionId = null;
@@ -1167,6 +1172,7 @@ export class AudioEngine {
       this.outroEndTick = null;
       this.activeFillId = null;
       this.fillEndTick = null;
+      this.fillReturnCrashTick = null;
       this.isTransitioning = false;
       this.isTransitionQueued = false;
       this.activeTransitionId = null;
@@ -1182,6 +1188,7 @@ export class AudioEngine {
     if (this.activeFillId && this.fillEndTick !== null && this.globalTick >= this.fillEndTick) {
       this.activeFillId = null;
       this.fillEndTick = null;
+      this.fillReturnCrashTick = this.globalTick;
       this.currentPartId = this.basePartId;
       this.notifyPedalState();
     }
@@ -1284,6 +1291,20 @@ export class AudioEngine {
     const isQuarterBeat = tick % subPerBeat === 0;
     const beatIndex = Math.floor((tick % stepsPerBar) / subPerBeat) + 1;
     const barIndex = Math.floor(tick / stepsPerBar) + 1;
+
+    const isFillReturn = this.fillReturnCrashTick === tick;
+    const isTransitionStart = this.isTransitioning && this.transitionStartTick === tick;
+    if (isFillReturn || isTransitionStart) {
+      this.synth.playSound('crash', this.masterGain, time, {
+        velocity: 125,
+        tune: 0,
+        decay: 1.2,
+        tone: 0.9,
+        pan: 0.2,
+        volume: 0.9,
+      });
+      if (isFillReturn) this.fillReturnCrashTick = null;
+    }
 
     if (this.metronomeEnabled && isQuarterBeat) {
       this.scheduleMetronomeClick(time, beatIndex === 1);
