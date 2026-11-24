@@ -33,6 +33,8 @@ import {
   StarterKitType,
 } from './presets/groovePresets';
 import {
+  getPartBarCount,
+  getStepsPerBar,
   SongPartId,
   SongProject,
   StepData,
@@ -75,12 +77,38 @@ export default function App() {
       .replace(/\s*\(\d+.*?\)/g, '')
       .trim() || p.name || 'Ritmo Sem Nome';
     const timeSig = (!p.timeSignature || (p.timeSignature as string) === '2/4') ? '4/4' : p.timeSignature;
+    const resolution = p.resolution === '1/16' ? '1/32' : (p.resolution || '1/32');
+    const parts = { ...p.parts };
+    ['verse', 'part_b', 'part_c'].forEach((partId) => {
+      const part = parts[partId];
+      if (!part) return;
+      const trackSteps = { ...(part.trackSteps || {}) };
+      p.tracks.forEach((track) => {
+        const existingSteps = trackSteps[track.id] || [];
+        const targetSteps = getStepsPerBar(timeSig, resolution) * getPartBarCount(partId);
+        if (existingSteps.length < targetSteps) {
+          const addedSteps = Array.from(
+            { length: targetSteps - existingSteps.length },
+            (_, index) =>
+              existingSteps.length > 0
+                ? { ...existingSteps[index % existingSteps.length] }
+                : createEmptySteps(1)[0]
+          );
+          trackSteps[track.id] = [
+            ...existingSteps,
+            ...addedSteps,
+          ];
+        }
+      });
+      parts[partId] = { ...part, trackSteps };
+    });
     return {
       ...p,
       name: cleanName,
       timeSignature: timeSig as any,
       barsCount: p.barsCount === 2 ? 1 : (p.barsCount || 1),
-      resolution: p.resolution === '1/16' ? '1/32' : (p.resolution || '1/32'),
+      resolution,
+      parts,
     };
   };
 
@@ -1063,18 +1091,32 @@ export default function App() {
   };
 
   const handleTimeSignatureChange = (timeSignature: TimeSignature) => {
-    setProject((prev) => ({ ...prev, timeSignature }));
+    setProject((prev) => {
+      const parts = { ...prev.parts };
+      Object.entries(parts).forEach(([partId, part]) => {
+        const trackSteps = { ...part.trackSteps };
+        prev.tracks.forEach((track) => {
+          const existingSteps = trackSteps[track.id] || [];
+          const targetSteps = getStepsPerBar(timeSignature, prev.resolution) * getPartBarCount(partId);
+          if (existingSteps.length < targetSteps) {
+            trackSteps[track.id] = [
+              ...existingSteps,
+              ...createEmptySteps(targetSteps - existingSteps.length),
+            ];
+          }
+        });
+        parts[partId] = { ...part, trackSteps };
+      });
+      return { ...prev, timeSignature, parts };
+    });
   };
 
   const handleResolutionChange = (resolution: RhythmicResolution) => {
     setProject((prev) => {
-      const subPerBeat =
-        resolution === '1/8' ? 2 : resolution === '1/8T' ? 3 : resolution === '1/16' ? 4 : resolution === '1/16T' ? 6 : 8;
-      const targetSteps = Math.min(32, Math.max(16, subPerBeat * 4 * (prev.barsCount || 1)));
       const updatedParts = { ...prev.parts };
-      Object.keys(updatedParts).forEach((pKey) => {
-        const pId = pKey as SongPartId;
-        const trackSteps = { ...(updatedParts[pId]?.trackSteps || {}) };
+      Object.entries(updatedParts).forEach(([partId, part]) => {
+        const trackSteps = { ...part.trackSteps };
+        const targetSteps = getStepsPerBar(prev.timeSignature, resolution) * getPartBarCount(partId);
         prev.tracks.forEach((t) => {
           const existing = trackSteps[t.id] || [];
           if (existing.length < targetSteps) {
@@ -1084,8 +1126,8 @@ export default function App() {
             ];
           }
         });
-        updatedParts[pId] = {
-          ...updatedParts[pId],
+        updatedParts[partId] = {
+          ...part,
           trackSteps,
         };
       });
@@ -1099,13 +1141,10 @@ export default function App() {
 
   const handleBarsCountChange = (barsCount: number) => {
     setProject((prev) => {
-      const subPerBeat =
-        prev.resolution === '1/8' ? 2 : prev.resolution === '1/8T' ? 3 : prev.resolution === '1/16' ? 4 : prev.resolution === '1/16T' ? 6 : 8;
-      const targetSteps = Math.min(32, Math.max(16, subPerBeat * 4 * barsCount));
       const updatedParts = { ...prev.parts };
-      Object.keys(updatedParts).forEach((pKey) => {
-        const pId = pKey as SongPartId;
-        const trackSteps = { ...(updatedParts[pId]?.trackSteps || {}) };
+      Object.entries(updatedParts).forEach(([partId, part]) => {
+        const trackSteps = { ...part.trackSteps };
+        const targetSteps = getStepsPerBar(prev.timeSignature, prev.resolution) * getPartBarCount(partId);
         prev.tracks.forEach((t) => {
           const existing = trackSteps[t.id] || [];
           if (existing.length < targetSteps) {
@@ -1115,8 +1154,8 @@ export default function App() {
             ];
           }
         });
-        updatedParts[pId] = {
-          ...updatedParts[pId],
+        updatedParts[partId] = {
+          ...part,
           trackSteps,
         };
       });
@@ -1198,7 +1237,9 @@ export default function App() {
         if (p) {
           const newSteps: Record<string, StepData[]> = {};
           params.customKitTracks!.forEach((t) => {
-            newSteps[t.id] = createEmptySteps(newProject.defaultStepCount || 32);
+            newSteps[t.id] = createEmptySteps(
+              getStepsPerBar(newProject.timeSignature, newProject.resolution) * getPartBarCount(pId)
+            );
           });
           p.trackSteps = newSteps;
         }
@@ -1578,7 +1619,9 @@ export default function App() {
           ...updatedParts[pId],
           trackSteps: {
             ...currentSteps,
-            [id]: createEmptySteps(64),
+            [id]: createEmptySteps(
+              getStepsPerBar(prev.timeSignature, prev.resolution) * getPartBarCount(pId)
+            ),
           },
         };
       });
@@ -1645,7 +1688,9 @@ export default function App() {
       if (!currentPart) return prev;
       const cleared: Record<string, StepData[]> = {};
       prev.tracks.forEach((t) => {
-        cleared[t.id] = createEmptySteps(32);
+        cleared[t.id] = createEmptySteps(
+          getStepsPerBar(prev.timeSignature, prev.resolution) * getPartBarCount(partId)
+        );
       });
       return {
         ...prev,
